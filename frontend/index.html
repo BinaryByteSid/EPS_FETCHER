@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPS Fetcher & Analytics Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-primary: #0b0f19;
+            --bg-secondary: #111827;
+            --bg-tertiary: #1f2937;
+            --accent-primary: #3b82f6;
+            --accent-primary-glow: rgba(59, 130, 246, 0.15);
+            --accent-secondary: #10b981;
+            --accent-secondary-glow: rgba(16, 185, 129, 0.15);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --glass-bg: rgba(17, 24, 39, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.06);
+            --glass-blur: blur(12px);
+            --shadow-premium: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.08) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+
+        header {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 1.25rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #3b82f6, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .logo i {
+            background: linear-gradient(135deg, #3b82f6, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+        }
+
+        .nav-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            transition: var(--transition-smooth);
+        }
+
+        .nav-btn.active, .nav-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        /* Glass Cards */
+        .card {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: var(--shadow-premium);
+            transition: var(--transition-smooth);
+        }
+
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+            box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.6);
+        }
+
+        .hero-section {
+            text-align: center;
+            padding: 3rem 1.5rem;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+            border-radius: 24px;
+        }
+
+        .hero-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            letter-spacing: -1px;
+            line-height: 1.2;
+        }
+
+        .hero-title span {
+            background: linear-gradient(135deg, #60a5fa, #34d399);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto 2rem;
+        }
+
+        /* Input Controls */
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            align-items: flex-end;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .input-group label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-field {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: var(--transition-smooth);
+            width: 100%;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px var(--accent-primary-glow);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, var(--accent-primary), #2563eb);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 0.75rem 1.5rem;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            height: 46px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--text-secondary);
+            box-shadow: none;
+        }
+
+        /* Toggle Switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            user-select: none;
+            height: 46px;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 26px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.1);
+            transition: .4s;
+            border-radius: 34px;
+            border: 1px solid var(--border-color);
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-primary);
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--accent-primary);
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+        }
+
+        .stat-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            background: var(--accent-primary-glow);
+            color: var(--accent-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+
+        .stat-icon.green {
+            background: var(--accent-secondary-glow);
+            color: var(--accent-secondary);
+        }
+
+        .stat-icon.purple {
+            background: rgba(139, 92, 246, 0.15);
+            color: #8b5cf6;
+        }
+
+        .stat-details h3 {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-details .value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        /* Data Tables */
+        .table-container {
+            overflow-x: auto;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.95rem;
+        }
+
+        th {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-secondary);
+            font-weight: 600;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+
+        .badge-positive {
+            background: var(--accent-secondary-glow);
+            color: var(--accent-secondary);
+        }
+
+        .badge-negative {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+        }
+
+        .badge-neutral {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-secondary);
+        }
+
+        .source-tag {
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+        }
+
+        /* Loading / Error States */
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: var(--accent-primary);
+            animation: spin 1s linear infinite;
+            margin: 2rem auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .notes-list {
+            margin-top: 1rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 1rem 1.5rem;
+        }
+
+        .notes-list h4 {
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+
+        .notes-list li {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+
+        /* Multi-company search layout */
+        .flex-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .section-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <i class="fa-solid fa-chart-line"></i>
+            <span>EPS Analytics</span>
+        </div>
+        <div class="nav-links">
+            <button class="nav-btn active" id="btn-single" onclick="switchTab('single')">
+                <i class="fa-solid fa-chart-bar"></i> Single Company
+            </button>
+            <button class="nav-btn" id="btn-multi" onclick="switchTab('multi')">
+                <i class="fa-solid fa-table-columns"></i> Multi-Company Pivot
+            </button>
+        </div>
+    </header>
+
+    <div class="container">
+        
+        <!-- Search Section -->
+        <section class="card" id="search-section">
+            <div class="controls-grid" id="single-controls">
+                <div class="input-group">
+                    <label for="symbol-input">Symbol / ISIN / BSE Code</label>
+                    <input type="text" id="symbol-input" class="input-field" placeholder="e.g. RELIANCE, TCS, INE002A01018" value="RELIANCE">
+                </div>
+                <div class="input-group">
+                    <label for="from-q">From Quarter</label>
+                    <input type="text" id="from-q" class="input-field" placeholder="e.g. Mar 2024" value="Mar 2024">
+                </div>
+                <div class="input-group">
+                    <label for="to-q">To Quarter</label>
+                    <input type="text" id="to-q" class="input-field" placeholder="e.g. Mar 2026" value="Mar 2026">
+                </div>
+                <div class="toggle-container" onclick="toggleConsolidated('single')">
+                    <span class="input-group"><label>Consolidated</label></span>
+                    <label class="switch">
+                        <input type="checkbox" id="consolidated-check" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <button class="btn" onclick="fetchSingleCompany()">
+                    <i class="fa-solid fa-magnifying-glass"></i> Analyze
+                </button>
+            </div>
+
+            <!-- Multi Company Controls (Hidden by default) -->
+            <div class="controls-grid hidden" id="multi-controls">
+                <div class="input-group">
+                    <label for="symbols-input">Symbols (Comma-separated)</label>
+                    <input type="text" id="symbols-input" class="input-field" placeholder="e.g. RELIANCE, TCS, INFy" value="RELIANCE, TCS">
+                </div>
+                <div class="input-group">
+                    <label for="from-q-multi">From Quarter</label>
+                    <input type="text" id="from-q-multi" class="input-field" placeholder="e.g. Mar 2024" value="Mar 2024">
+                </div>
+                <div class="input-group">
+                    <label for="to-q-multi">To Quarter</label>
+                    <input type="text" id="to-q-multi" class="input-field" placeholder="e.g. Mar 2026" value="Mar 2026">
+                </div>
+                <div class="toggle-container" onclick="toggleConsolidated('multi')">
+                    <span class="input-group"><label>Consolidated</label></span>
+                    <label class="switch">
+                        <input type="checkbox" id="consolidated-check-multi" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <button class="btn" onclick="fetchMultiCompany()">
+                    <i class="fa-solid fa-layer-group"></i> Pivot Compare
+                </button>
+            </div>
+
+            <div id="error-box" class="error-message hidden">
+                <i class="fa-solid fa-circle-exclamation"></i>
+                <span id="error-text">An error occurred.</span>
+            </div>
+        </section>
+
+        <!-- Loading spinner -->
+        <div id="loading" class="spinner hidden"></div>
+
+        <!-- Dashboard Content (Single Company View) -->
+        <main id="single-view">
+            <!-- Company Info & Stats -->
+            <section class="card" style="margin-bottom: 2rem;">
+                <div class="flex-row">
+                    <div>
+                        <h2 class="section-title" id="company-name">Reliance Industries Limited</h2>
+                        <p style="color: var(--text-secondary); margin-top: 0.25rem;">
+                            Symbol: <strong id="company-symbol">RELIANCE</strong> | 
+                            ISIN: <strong id="company-isin">INE002A01018</strong> | 
+                            BSE Code: <strong id="company-bse">500325</strong>
+                        </p>
+                    </div>
+                    <button class="btn btn-secondary" onclick="downloadExcelSingle()">
+                        <i class="fa-solid fa-file-excel"></i> Download Excel
+                    </button>
+                </div>
+
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fa-solid fa-wallet"></i></div>
+                        <div class="stat-details">
+                            <h3>Latest Sales (Crores)</h3>
+                            <div class="value" id="stat-sales">₹--</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fa-solid fa-hand-holding-dollar"></i></div>
+                        <div class="stat-details">
+                            <h3>Latest Net Profit (Crores)</h3>
+                            <div class="value" id="stat-profit">₹--</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon purple"><i class="fa-solid fa-coins"></i></div>
+                        <div class="stat-details">
+                            <h3>Latest EPS (Diluted)</h3>
+                            <div class="value" id="stat-eps">₹--</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Detailed Table -->
+            <section class="card">
+                <h3 class="section-title" style="margin-bottom: 1.5rem;">Quarterly Performance & YoY Analysis</h3>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Quarter</th>
+                                <th>Sales (₹ Cr)</th>
+                                <th>Sales YoY %</th>
+                                <th>Net Profit (₹ Cr)</th>
+                                <th>Profit YoY %</th>
+                                <th>EPS (₹)</th>
+                                <th>EPS YoY %</th>
+                                <th>BSE End Price</th>
+                                <th>EPS Source</th>
+                            </tr>
+                        </thead>
+                        <tbody id="performance-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="notes-list hidden" id="enrichment-notes">
+                    <h4><i class="fa-solid fa-info-circle"></i> Data Retrieval Notes</h4>
+                    <ul id="notes-items"></ul>
+                </div>
+            </section>
+        </main>
+
+        <!-- Dashboard Content (Multi Company Pivot View) -->
+        <main id="multi-view" class="hidden">
+            <section class="card">
+                <div class="flex-row">
+                    <h3 class="section-title">Pivoted Horizontal EPS Comparison (Diluted)</h3>
+                    <button class="btn btn-secondary" onclick="downloadExcelMulti()">
+                        <i class="fa-solid fa-file-excel"></i> Download Excel
+                    </button>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead id="pivot-table-headers">
+                            <!-- Populated dynamically -->
+                        </thead>
+                        <tbody id="pivot-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        function switchTab(tab) {
+            document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+            if (tab === 'single') {
+                document.getElementById('btn-single').classList.add('active');
+                document.getElementById('single-controls').classList.remove('hidden');
+                document.getElementById('multi-controls').classList.add('hidden');
+                document.getElementById('single-view').classList.remove('hidden');
+                document.getElementById('multi-view').classList.add('hidden');
+            } else {
+                document.getElementById('btn-multi').classList.add('active');
+                document.getElementById('single-controls').classList.add('hidden');
+                document.getElementById('multi-controls').classList.remove('hidden');
+                document.getElementById('single-view').classList.add('hidden');
+                document.getElementById('multi-view').classList.remove('hidden');
+            }
+        }
+
+        function toggleConsolidated(mode) {
+            const check = mode === 'single' ? 'consolidated-check' : 'consolidated-check-multi';
+            const checkbox = document.getElementById(check);
+            checkbox.checked = !checkbox.checked;
+        }
+
+        function showError(msg) {
+            const box = document.getElementById('error-box');
+            document.getElementById('error-text').innerText = msg;
+            box.classList.remove('hidden');
+        }
+
+        function clearError() {
+            document.getElementById('error-box').classList.add('hidden');
+        }
+
+        function showLoading(show) {
+            if (show) {
+                document.getElementById('loading').classList.remove('hidden');
+            } else {
+                document.getElementById('loading').classList.add('hidden');
+            }
+        }
+
+        async function fetchSingleCompany() {
+            clearError();
+            showLoading(true);
+
+            const symbol = document.getElementById('symbol-input').value.trim();
+            const fromQ = document.getElementById('from-q').value.trim();
+            const toQ = document.getElementById('to-q').value.trim();
+            const consolidated = document.getElementById('consolidated-check').checked;
+
+            if (!symbol) {
+                showError("Please enter a company symbol, ISIN, or BSE Code.");
+                showLoading(false);
+                return;
+            }
+
+            try {
+                // First resolve the symbol
+                const resolveRes = await fetch(`${API_BASE}/api/resolve?query=${encodeURIComponent(symbol)}`);
+                if (!resolveRes.ok) throw new Error("Failed to resolve symbol. Please check the network connection.");
+                const companyInfo = await resolveRes.json();
+
+                // Now scrape
+                let scrapeUrl = `${API_BASE}/api/scrape?symbol=${encodeURIComponent(companyInfo.symbol)}&consolidated=${consolidated}`;
+                if (fromQ) scrapeUrl += `&from_quarter=${encodeURIComponent(fromQ)}`;
+                if (toQ) scrapeUrl += `&to_quarter=${encodeURIComponent(toQ)}`;
+
+                const scrapeRes = await fetch(scrapeUrl);
+                if (!scrapeRes.ok) {
+                    const errPayload = await scrapeRes.json();
+                    throw new Error(errPayload.detail || "Scraping failed.");
+                }
+                const data = await scrapeRes.json();
+
+                // Update UI metadata
+                document.getElementById('company-name').innerText = data.company.name || data.company.symbol;
+                document.getElementById('company-symbol').innerText = data.company.symbol;
+                document.getElementById('company-isin').innerText = data.company.isin || 'N/A';
+                document.getElementById('company-bse').innerText = data.company.bse || 'N/A';
+
+                // Fill stats
+                const records = data.records;
+                const comparison = data.comparison;
+                const prices = data.prices || {};
+                
+                if (records && records.length > 0) {
+                    const latest = records[records.length - 1];
+                    document.getElementById('stat-sales').innerText = latest.Sales ? `₹${Number(latest.Sales).toLocaleString('en-IN')}` : 'N/A';
+                    document.getElementById('stat-profit').innerText = latest.NetProfit || latest['Net Profit'] ? `₹${Number(latest.NetProfit || latest['Net Profit']).toLocaleString('en-IN')}` : 'N/A';
+                    document.getElementById('stat-eps').innerText = latest['EPS in Rs'] ? `₹${latest['EPS in Rs'].toFixed(2)}` : 'N/A';
+                } else {
+                    document.getElementById('stat-sales').innerText = 'N/A';
+                    document.getElementById('stat-profit').innerText = 'N/A';
+                    document.getElementById('stat-eps').innerText = 'N/A';
+                }
+
+                // Render table rows
+                const tbody = document.getElementById('performance-table-body');
+                tbody.innerHTML = '';
+
+                if (!records || records.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">No records found for the specified range.</td></tr>`;
+                } else {
+                    records.forEach(rec => {
+                        const comp = comparison.find(c => c.Quarter === rec.Quarter) || {};
+                        const price = prices[rec.Quarter] !== undefined && prices[rec.Quarter] !== null ? `₹${prices[rec.Quarter].toFixed(2)}` : '--';
+                        
+                        const salesYoY = comp['Sales YoY (%)'];
+                        const profitYoY = comp['Net Profit YoY (%)'];
+                        const epsYoY = comp['EPS YoY (%)'];
+
+                        const formatYoY = (val) => {
+                            if (val === undefined || val === null) return `<span class="badge badge-neutral">--</span>`;
+                            const isPositive = val >= 0;
+                            return `<span class="badge ${isPositive ? 'badge-positive' : 'badge-negative'}">
+                                ${isPositive ? '+' : ''}${val.toFixed(2)}%
+                            </span>`;
+                        };
+
+                        tbody.innerHTML += `
+                            <tr>
+                                <td><strong>${rec.Quarter}</strong></td>
+                                <td>${rec.Sales ? rec.Sales.toLocaleString('en-IN') : 'N/A'}</td>
+                                <td>${formatYoY(salesYoY)}</td>
+                                <td>${(rec.NetProfit || rec['Net Profit']) ? (rec.NetProfit || rec['Net Profit']).toLocaleString('en-IN') : 'N/A'}</td>
+                                <td>${formatYoY(profitYoY)}</td>
+                                <td><strong>${rec['EPS in Rs'] ? rec['EPS in Rs'].toFixed(2) : 'N/A'}</strong></td>
+                                <td>${formatYoY(epsYoY)}</td>
+                                <td>${price}</td>
+                                <td><span class="source-tag">${rec['EPS Source'] || 'screener'}</span></td>
+                            </tr>
+                        `;
+                    });
+                }
+
+                // Display notes
+                const notesContainer = document.getElementById('enrichment-notes');
+                const notesList = document.getElementById('notes-items');
+                notesList.innerHTML = '';
+                if (data.notes && data.notes.length > 0) {
+                    data.notes.forEach(note => {
+                        notesList.innerHTML += `<li>${note}</li>`;
+                    });
+                    notesContainer.classList.remove('hidden');
+                } else {
+                    notesContainer.classList.add('hidden');
+                }
+
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function fetchMultiCompany() {
+            clearError();
+            showLoading(true);
+
+            const symbolsRaw = document.getElementById('symbols-input').value.trim();
+            const fromQ = document.getElementById('from-q-multi').value.trim();
+            const toQ = document.getElementById('to-q-multi').value.trim();
+            const consolidated = document.getElementById('consolidated-check-multi').checked;
+
+            if (!symbolsRaw) {
+                showError("Please enter at least one company symbol.");
+                showLoading(false);
+                return;
+            }
+
+            const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+            try {
+                const res = await fetch(`${API_BASE}/api/pivot`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        symbols: symbols,
+                        from_quarter: fromQ,
+                        to_quarter: toQ,
+                        consolidated: consolidated
+                    })
+                });
+
+                if (!res.ok) {
+                    const errPayload = await res.json();
+                    throw new Error(errPayload.detail || "Failed to pivot comparison.");
+                }
+
+                const data = await res.json();
+
+                // Build Headers
+                const thead = document.getElementById('pivot-table-headers');
+                let headerHtml = `<tr><th>Company / Scrip</th><th>BSE Code</th><th>ISIN</th>`;
+                data.quarters.forEach(q => {
+                    headerHtml += `<th>${q}</th>`;
+                });
+                headerHtml += `</tr>`;
+                thead.innerHTML = headerHtml;
+
+                // Build Rows
+                const tbody = document.getElementById('pivot-table-body');
+                tbody.innerHTML = '';
+
+                if (!data.rows || data.rows.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="${data.quarters.length + 3}" style="text-align: center; color: var(--text-muted);">No pivot comparison data available.</td></tr>`;
+                } else {
+                    data.rows.forEach(row => {
+                        let rowHtml = `
+                            <tr>
+                                <td><strong>${row.Symbol}</strong> <span style="font-size: 0.8rem; color: var(--text-muted); block">${row.Name || ''}</span></td>
+                                <td>${row.BSE || 'N/A'}</td>
+                                <td><span style="font-size: 0.85rem; font-family: monospace;">${row.ISIN || 'N/A'}</span></td>
+                        `;
+                        data.quarters.forEach(q => {
+                            const val = row[q];
+                            const displayVal = val !== undefined && val !== null ? `<strong>₹${Number(val).toFixed(2)}</strong>` : '--';
+                            rowHtml += `<td>${displayVal}</td>`;
+                        });
+                        rowHtml += `</tr>`;
+                        tbody.innerHTML += rowHtml;
+                    });
+                }
+
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function downloadExcelSingle() {
+            const symbol = document.getElementById('company-symbol').innerText.trim();
+            const fromQ = document.getElementById('from-q').value.trim();
+            const toQ = document.getElementById('to-q').value.trim();
+            const consolidated = document.getElementById('consolidated-check').checked;
+            
+            if (!symbol || symbol === 'RELIANCE' && document.getElementById('company-name').innerText === 'Reliance Industries Limited' && !document.getElementById('performance-table-body').children.length) {
+                alert("Please analyze a company first.");
+                return;
+            }
+            
+            const url = `${API_BASE}/api/export?symbols=${encodeURIComponent(symbol)}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}`;
+            window.open(url, '_blank');
+        }
+
+        function downloadExcelMulti() {
+            const symbolsRaw = document.getElementById('symbols-input').value.trim();
+            const fromQ = document.getElementById('from-q-multi').value.trim();
+            const toQ = document.getElementById('to-q-multi').value.trim();
+            const consolidated = document.getElementById('consolidated-check-multi').checked;
+            
+            if (!symbolsRaw) {
+                alert("Please enter symbols to export.");
+                return;
+            }
+            
+            const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean);
+            let queryStr = symbols.map(s => `symbols=${encodeURIComponent(s)}`).join('&');
+            
+            const url = `${API_BASE}/api/export?${queryStr}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}`;
+            window.open(url, '_blank');
+        }
+
+        // Initial Load
+        window.addEventListener('DOMContentLoaded', () => {
+            fetchSingleCompany();
+        });
+    </script>
+</body>
+</html>

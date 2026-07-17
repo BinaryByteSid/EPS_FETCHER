@@ -16,7 +16,8 @@ BSE_BHAVCOPY_HEADERS = {
 
 def load_companies_db():
     global COMPANIES_DB
-    path = "c:/Users/sidha/OneDrive/Desktop/EPS/ISIN'S.xlsx"
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(base_dir, "ISIN'S.xlsx")
     if not os.path.exists(path):
         print(f"Warning: ISIN'S.xlsx mapping database not found at {path}")
         return []
@@ -47,17 +48,26 @@ def load_companies_db():
             if "bse" in k or "scrip" in k or "code" in k or "number" in k:
                 bse_col = original_col
                 break
+
+        # Match Company Name
+        name_col = None
+        for k, original_col in cols.items():
+            if "name" in k or "company" in k:
+                name_col = original_col
+                break
                 
         if not isin_col or not symbol_col:
             # Fallback
             isin_col = df.columns[0]
             symbol_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
             bse_col = df.columns[2] if len(df.columns) > 2 else None
+            name_col = df.columns[3] if len(df.columns) > 3 else None
             
         companies = []
         for idx, row in df.iterrows():
             isin_val = str(row[isin_col]).strip() if pd.notna(row[isin_col]) else ""
             symbol_val = str(row[symbol_col]).strip() if pd.notna(row[symbol_col]) else ""
+            name_val = str(row[name_col]).strip() if name_col and pd.notna(row[name_col]) else ""
             bse_val = ""
             if bse_col and pd.notna(row[bse_col]):
                 # Remove decimals (e.g. 500325.0 -> 500325)
@@ -66,6 +76,7 @@ def load_companies_db():
             if isin_val or symbol_val:
                 companies.append({
                     "symbol": symbol_val.upper(),
+                    "name": name_val or symbol_val.upper(),
                     "isin": isin_val.upper(),
                     "bse": bse_val
                 })
@@ -90,6 +101,7 @@ def get_company_by_symbol(symbol: str) -> dict:
             return c
     return {
         "symbol": symbol_clean,
+        "name": symbol_clean,
         "isin": "N/A",
         "bse": "N/A"
     }
@@ -100,69 +112,10 @@ def _empty_company_meta(query: str) -> dict:
     isin_value = query_clean if len(query_clean) == 12 and query_clean.startswith("IN") else "N/A"
     return {
         "symbol": query_clean,
+        "name": query_clean,
         "isin": isin_value,
-        "bse": "N/A",
-        "name": query_clean
+        "bse": "N/A"
     }
-
-
-def _select_bse_search_match(payload: list, query_clean: str) -> dict | None:
-    """
-    Picks the BSE search result that actually corresponds to `query_clean`.
-
-    BSE's GetQuoteAllSearchDatabeta endpoint is a fuzzy/substring search, so a
-    query like "TCS" also returns unrelated equities whose name merely *contains*
-    the substring (e.g. WSTCSTPAPR / West Coast Paper Mills). Blindly accepting
-    the first equity row silently scrapes the wrong company, so we only accept a
-    row when it unambiguously matches the query and return None otherwise.
-    """
-    equity_items = [
-        item
-        for item in payload
-        if str(item.get("Type", "")).lower().startswith("in equity")
-    ]
-    if not equity_items:
-        return None
-
-    is_isin_query = len(query_clean) == 12 and query_clean.startswith("IN")
-    is_code_query = query_clean.isdigit()
-
-    def _code(item) -> str:
-        return str(item.get("strSricpCode") or "").split(".")[0].strip()
-
-    def _symbol(item) -> str:
-        return str(item.get("shortName") or "").strip().upper()
-
-    def _isin(item) -> str:
-        return str(item.get("Isin") or "").strip().upper()
-
-    # 1. ISIN query -> exact ISIN match.
-    if is_isin_query:
-        for item in equity_items:
-            if _isin(item) == query_clean:
-                return item
-        return None
-
-    # 2. Numeric query -> exact BSE scrip-code match.
-    if is_code_query:
-        for item in equity_items:
-            if _code(item) == query_clean:
-                return item
-        return None
-
-    # 3. Ticker query -> exact symbol match wins.
-    for item in equity_items:
-        if _symbol(item) == query_clean:
-            return item
-
-    # 4. Otherwise accept a symbol that *starts with* the query, but only when it
-    #    is the single such candidate (a prefix shared by several tickers is
-    #    ambiguous and should fall through to the raw-query fallback instead).
-    prefix_matches = [item for item in equity_items if _symbol(item).startswith(query_clean)]
-    if len(prefix_matches) == 1:
-        return prefix_matches[0]
-
-    return None
 
 
 def resolve_company(query: str) -> dict:
@@ -173,16 +126,12 @@ def resolve_company(query: str) -> dict:
     query_clean = query.strip().upper()
 
     for company in COMPANIES_DB:
-        # Avoid matching entries where the symbol is a placeholder ISIN (starts with 'IN' and 12 chars)
-        sym = company.get("symbol", "")
-        is_placeholder = len(sym) == 12 and sym.startswith("IN")
-        if not is_placeholder:
-            if company.get("symbol") == query_clean:
-                return company
-            if company.get("isin") == query_clean:
-                return company
-            if company.get("bse") == query_clean:
-                return company
+        if company["symbol"] == query_clean:
+            return company
+        if company["isin"] == query_clean:
+            return company
+        if company["bse"] == query_clean:
+            return company
 
     try:
         search_url = (
@@ -198,22 +147,26 @@ def resolve_company(query: str) -> dict:
         if response.status_code == 200:
             payload = response.json()
             if isinstance(payload, list) and payload:
-                equity_match = _select_bse_search_match(payload, query_clean)
-                symbol_value = str(equity_match.get("shortName") or "").strip().upper() if equity_match else ""
-                bse_value = str(equity_match.get("strSricpCode") or "").split(".")[0].strip() if equity_match else ""
-                isin_value = str(equity_match.get("Isin") or "").strip().upper() if equity_match else ""
-                name_value = str(equity_match.get("scripName") or symbol_value).strip() if equity_match else ""
+                equity_match = next(
+                    (
+                        item
+                        for item in payload
+                        if str(item.get("Type", "")).lower().startswith("in equity")
+                    ),
+                    payload[0],
+                )
+                symbol_value = str(equity_match.get("shortName") or "").strip().upper()
+                bse_value = str(equity_match.get("strSricpCode") or "").split(".")[0].strip()
+                isin_value = str(equity_match.get("Isin") or "").strip().upper()
+                name_value = str(equity_match.get("scripName") or equity_match.get("shortName") or "").strip()
 
                 if symbol_value:
-                    resolved_res = {
+                    return {
                         "symbol": symbol_value,
+                        "name": name_value or symbol_value,
                         "isin": isin_value or (query_clean if len(query_clean) == 12 and query_clean.startswith("IN") else "N/A"),
                         "bse": bse_value or "N/A",
-                        "name": name_value
                     }
-                    # Cache in database to avoid future slow API queries
-                    COMPANIES_DB.append(resolved_res)
-                    return resolved_res
     except Exception as e:
         print(f"Warning: Failed to resolve '{query_clean}' via BSE official search: {e}")
 
@@ -447,9 +400,9 @@ def scrape_screener_quarters(symbol: str, consolidated: bool = True) -> list[dic
         s_val = sales_vals[i] if i < len(sales_vals) else ""
         np_val = net_profit_vals[i] if i < len(net_profit_vals) else ""
         eps_val = eps_vals[i] if i < len(eps_vals) else ""
-
+        
         def clean_value(v):
-            v_clean = str(v).replace(",", "").replace("%", "").strip()
+            v_clean = v.replace(",", "").replace("%", "").strip()
             if not v_clean or v_clean == "-" or v_clean == "":
                 return None
             try:
@@ -458,96 +411,16 @@ def scrape_screener_quarters(symbol: str, consolidated: bool = True) -> list[dic
                 return int(v_clean)
             except ValueError:
                 return v_clean
-
+                
         records.append({
             "Symbol": symbol,
             "Quarter": q,
             "Sales": clean_value(s_val),
             "Net Profit": clean_value(np_val),
-            # Screener's basic EPS row — used only as a fallback. The authoritative
-            # diluted EPS from the filed results is applied by apply_diluted_eps().
-            "EPS in Rs": clean_value(eps_val),
-            "EPS Source": "screener-basic",
+            "EPS in Rs": clean_value(eps_val)
         })
-
+        
     return records
-
-
-# Wall-clock budget for enriching a single company with filed diluted EPS.
-# NSE/BSE filing endpoints can be slow or hang; once this budget is spent we
-# stop fetching and keep Screener's basic EPS for any unresolved quarters, so a
-# slow upstream degrades gracefully instead of hanging the whole request.
-DILUTED_EPS_BUDGET_SECONDS = 40.0
-
-
-def apply_diluted_eps(symbol: str, records: list[dict], consolidated: bool = True,
-                      budget_seconds: float = DILUTED_EPS_BUDGET_SECONDS) -> list[str]:
-    """
-    Overrides the 'EPS in Rs' of each record with the Diluted EPS taken from the
-    company's filed quarterly results (NSE structured XBRL, primary; BSE result
-    PDF, fallback). Mutates `records` in place and returns a list of notes about
-    any quarters that fell back to a less-authoritative source.
-
-    Only the quarters present in `records` are looked up, so callers should pass
-    the already-filtered range to avoid unnecessary downloads.
-
-    `budget_seconds` caps the total wall-clock time spent talking to the NSE/BSE
-    filing endpoints for this company. When it is exhausted, remaining quarters
-    keep Screener's basic EPS rather than blocking the request indefinitely.
-    """
-    from backend.nse_eps import fetch_diluted_eps_nse
-    from backend.bse_eps import fetch_diluted_eps_bse
-    import time
-
-    notes: list[str] = []
-    if not records:
-        return notes
-
-    quarters = [parse_quarter(r["Quarter"]) for r in records]
-    from_q, to_q = min(quarters), max(quarters)
-
-    deadline = time.monotonic() + budget_seconds
-
-    # Primary source: NSE structured filings.
-    diluted = {}
-    try:
-        diluted = fetch_diluted_eps_nse(symbol, from_q, to_q, consolidated=consolidated,
-                                        deadline=deadline)
-    except Exception as e:
-        notes.append(f"NSE diluted-EPS lookup failed for {symbol}: {e}")
-
-    # Fallback source: BSE result PDFs, only for quarters NSE could not supply
-    # and only while there is time left in the budget.
-    missing = [r["Quarter"] for r in records if r["Quarter"] not in diluted]
-    if missing and time.monotonic() < deadline:
-        try:
-            company = get_company_by_symbol(symbol)
-            bse = fetch_diluted_eps_bse(company, from_q, to_q, consolidated=consolidated,
-                                        deadline=deadline)
-            for q_label, info in bse.items():
-                if q_label not in diluted:
-                    diluted[q_label] = info
-        except Exception as e:
-            notes.append(f"BSE diluted-EPS fallback failed for {symbol}: {e}")
-    elif missing:
-        notes.append(
-            f"Diluted-EPS time budget ({budget_seconds:.0f}s) reached for {symbol}; "
-            f"kept Screener basic EPS for {len(missing)} unresolved quarter(s)."
-        )
-
-    for r in records:
-        info = diluted.get(r["Quarter"])
-        if info and info.get("value") is not None:
-            r["EPS in Rs"] = info["value"]
-            source = "NSE-XBRL" if "xbrl" in info else "BSE-PDF"
-            r["EPS Source"] = f"{source} diluted ({info.get('kind', '?')})"
-        else:
-            notes.append(
-                f"No filed diluted EPS found for {symbol} {r['Quarter']}; "
-                f"kept Screener basic EPS."
-            )
-    return notes
-
 
 def filter_quarters(records: list[dict], from_quarter: str, to_quarter: str) -> list[dict]:
     """
