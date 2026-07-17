@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code and database
 COPY backend ./backend
 COPY frontend ./frontend
-COPY ["ISIN'S.xlsx", "./ISIN'S.xlsx"]
+COPY ISINS.xlsx ./ISINS.xlsx
 
 EXPOSE 8000
 

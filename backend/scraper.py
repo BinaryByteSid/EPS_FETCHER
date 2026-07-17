@@ -17,9 +17,9 @@ BSE_BHAVCOPY_HEADERS = {
 def load_companies_db():
     global COMPANIES_DB
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(base_dir, "ISIN'S.xlsx")
+    path = os.path.join(base_dir, "ISINS.xlsx")
     if not os.path.exists(path):
-        print(f"Warning: ISIN'S.xlsx mapping database not found at {path}")
+        print(f"Warning: ISINS.xlsx mapping database not found at {path}")
         return []
     try:
         # Load excel file
