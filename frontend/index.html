@@ -473,6 +473,58 @@
             font-size: 1.5rem;
             font-weight: 700;
         }
+
+        /* EPS Type Select */
+        .select-field {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: var(--transition-smooth);
+            width: 100%;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239ca3af' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 1rem center;
+            cursor: pointer;
+        }
+
+        .select-field:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            background-color: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px var(--accent-primary-glow);
+        }
+
+        .select-field option {
+            background: #1f2937;
+            color: var(--text-primary);
+        }
+
+        .eps-type-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .eps-type-badge.basic {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+
+        .eps-type-badge.diluted {
+            background: rgba(139, 92, 246, 0.15);
+            color: #8b5cf6;
+        }
     </style>
 </head>
 <body>
@@ -509,6 +561,13 @@
                     <label for="to-q">To Quarter</label>
                     <input type="text" id="to-q" class="input-field" placeholder="e.g. Mar 2026" value="Mar 2026">
                 </div>
+                <div class="input-group">
+                    <label for="eps-type">EPS Type</label>
+                    <select id="eps-type" class="select-field">
+                        <option value="diluted" selected>Diluted</option>
+                        <option value="basic">Basic</option>
+                    </select>
+                </div>
                 <div class="toggle-container" onclick="toggleConsolidated('single')">
                     <span class="input-group"><label>Consolidated</label></span>
                     <label class="switch">
@@ -534,6 +593,13 @@
                 <div class="input-group">
                     <label for="to-q-multi">To Quarter</label>
                     <input type="text" id="to-q-multi" class="input-field" placeholder="e.g. Mar 2026" value="Mar 2026">
+                </div>
+                <div class="input-group">
+                    <label for="eps-type-multi">EPS Type</label>
+                    <select id="eps-type-multi" class="select-field">
+                        <option value="diluted" selected>Diluted</option>
+                        <option value="basic">Basic</option>
+                    </select>
                 </div>
                 <div class="toggle-container" onclick="toggleConsolidated('multi')">
                     <span class="input-group"><label>Consolidated</label></span>
@@ -593,7 +659,7 @@
                     <div class="stat-card">
                         <div class="stat-icon purple"><i class="fa-solid fa-coins"></i></div>
                         <div class="stat-details">
-                            <h3>Latest EPS (Diluted)</h3>
+                            <h3 id="stat-eps-label">Latest EPS (Diluted)</h3>
                             <div class="value" id="stat-eps">₹--</div>
                         </div>
                     </div>
@@ -635,7 +701,7 @@
         <main id="multi-view" class="hidden">
             <section class="card">
                 <div class="flex-row">
-                    <h3 class="section-title">Pivoted Horizontal EPS Comparison (Diluted)</h3>
+                    <h3 class="section-title" id="pivot-title">Pivoted Horizontal EPS Comparison (Diluted)</h3>
                     <button class="btn btn-secondary" onclick="downloadExcelMulti()">
                         <i class="fa-solid fa-file-excel"></i> Download Excel
                     </button>
@@ -707,6 +773,7 @@
             const fromQ = document.getElementById('from-q').value.trim();
             const toQ = document.getElementById('to-q').value.trim();
             const consolidated = document.getElementById('consolidated-check').checked;
+            const epsType = document.getElementById('eps-type').value;
 
             if (!symbol) {
                 showError("Please enter a company symbol, ISIN, or BSE Code.");
@@ -721,7 +788,7 @@
                 const companyInfo = await resolveRes.json();
 
                 // Now scrape
-                let scrapeUrl = `${API_BASE}/api/scrape?symbol=${encodeURIComponent(companyInfo.symbol)}&consolidated=${consolidated}`;
+                let scrapeUrl = `${API_BASE}/api/scrape?symbol=${encodeURIComponent(companyInfo.symbol)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}`;
                 if (fromQ) scrapeUrl += `&from_quarter=${encodeURIComponent(fromQ)}`;
                 if (toQ) scrapeUrl += `&to_quarter=${encodeURIComponent(toQ)}`;
 
@@ -748,6 +815,8 @@
                     document.getElementById('stat-sales').innerText = latest.Sales ? `₹${Number(latest.Sales).toLocaleString('en-IN')}` : 'N/A';
                     document.getElementById('stat-profit').innerText = latest.NetProfit || latest['Net Profit'] ? `₹${Number(latest.NetProfit || latest['Net Profit']).toLocaleString('en-IN')}` : 'N/A';
                     document.getElementById('stat-eps').innerText = latest['EPS in Rs'] ? `₹${latest['EPS in Rs'].toFixed(2)}` : 'N/A';
+                    const epsLabel = epsType === 'basic' ? 'Latest EPS (Basic)' : 'Latest EPS (Diluted)';
+                    document.getElementById('stat-eps-label').innerText = epsLabel;
                 } else {
                     document.getElementById('stat-sales').innerText = 'N/A';
                     document.getElementById('stat-profit').innerText = 'N/A';
@@ -821,6 +890,7 @@
             const fromQ = document.getElementById('from-q-multi').value.trim();
             const toQ = document.getElementById('to-q-multi').value.trim();
             const consolidated = document.getElementById('consolidated-check-multi').checked;
+            const epsType = document.getElementById('eps-type-multi').value;
 
             if (!symbolsRaw) {
                 showError("Please enter at least one company symbol.");
@@ -840,7 +910,8 @@
                         symbols: symbols,
                         from_quarter: fromQ,
                         to_quarter: toQ,
-                        consolidated: consolidated
+                        consolidated: consolidated,
+                        eps_type: epsType
                     })
                 });
 
@@ -853,6 +924,9 @@
 
                 // Build Headers
                 const thead = document.getElementById('pivot-table-headers');
+                const pivotLabel = epsType === 'basic' ? 'Basic' : 'Diluted';
+                document.getElementById('pivot-title').innerText = `Pivoted Horizontal EPS Comparison (${pivotLabel})`;
+
                 let headerHtml = `<tr><th>Company / Scrip</th><th>BSE Code</th><th>ISIN</th>`;
                 data.quarters.forEach(q => {
                     headerHtml += `<th>${q}</th>`;
@@ -896,13 +970,14 @@
             const fromQ = document.getElementById('from-q').value.trim();
             const toQ = document.getElementById('to-q').value.trim();
             const consolidated = document.getElementById('consolidated-check').checked;
+            const epsType = document.getElementById('eps-type').value;
             
             if (!symbol || symbol === 'RELIANCE' && document.getElementById('company-name').innerText === 'Reliance Industries Limited' && !document.getElementById('performance-table-body').children.length) {
                 alert("Please analyze a company first.");
                 return;
             }
             
-            const url = `${API_BASE}/api/export?symbols=${encodeURIComponent(symbol)}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}`;
+            const url = `${API_BASE}/api/export?symbols=${encodeURIComponent(symbol)}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}`;
             window.open(url, '_blank');
         }
 
@@ -911,6 +986,7 @@
             const fromQ = document.getElementById('from-q-multi').value.trim();
             const toQ = document.getElementById('to-q-multi').value.trim();
             const consolidated = document.getElementById('consolidated-check-multi').checked;
+            const epsType = document.getElementById('eps-type-multi').value;
             
             if (!symbolsRaw) {
                 alert("Please enter symbols to export.");
@@ -920,7 +996,7 @@
             const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean);
             let queryStr = symbols.map(s => `symbols=${encodeURIComponent(s)}`).join('&');
             
-            const url = `${API_BASE}/api/export?${queryStr}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}`;
+            const url = `${API_BASE}/api/export?${queryStr}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}`;
             window.open(url, '_blank');
         }
 

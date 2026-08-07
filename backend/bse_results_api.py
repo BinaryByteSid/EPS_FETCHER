@@ -36,9 +36,9 @@ _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
 _MON_LABEL = {v: k.title() for k, v in _MONTHS.items()}
 
-# Filed results never change; cache per (scripcode, label, consolidated).
+# Filed results never change; cache per (scripcode, label, consolidated, eps_type).
 # None records a definitive miss; transient failures are not cached.
-_CACHE: dict[tuple[str, str, bool], dict | None] = {}
+_CACHE: dict[tuple[str, str, bool, str], dict | None] = {}
 
 # Give up after this many consecutive empty/failed ids while walking back, so a
 # delisted gap or numbering quirk cannot loop forever.
@@ -124,16 +124,16 @@ def _latest_qtr_id(session, scripcode: str, deadline) -> float | None:
     return None
 
 
-def _diluted_from_standalone(session, scripcode: str, qtr_id: str, deadline):
+def _eps_from_standalone(session, scripcode: str, qtr_id: str, deadline, eps_type: str = "diluted"):
     data = _get_json(session, f"{API_BASE}/Corp_detailedResult_Transpose_ng/w?Scrip_cd={scripcode}&Qtr={qtr_id}", deadline)
     if not isinstance(data, dict):
         return None
     rows = data.get("table1") or []
     fields = {str(r.get("fld_desc", "")).strip().lower(): r.get("Value") for r in rows}
-    return _pick(fields, "date begin"), _pick(fields, "date end"), _pick_diluted(fields)
+    return _pick(fields, "date begin"), _pick(fields, "date end"), _pick_eps(fields, eps_type)
 
 
-def _diluted_from_consolidated(session, scripcode: str, qtr_id: str, name: str, deadline):
+def _eps_from_consolidated(session, scripcode: str, qtr_id: str, name: str, deadline, eps_type: str = "diluted"):
     url = (f"{API_BASE}/Corp_BSEDnBResults_SEBI_Consolidated_Res_ng/w"
            "?usp1=usp_BSEINDIA_CONSILDATERESULT_UAT&usp2=USP_GetResult_Type_consolidated"
            "&usp3=usp_GET_BSEDnBResults_SplitUP_consoldated&type1=C"
@@ -143,18 +143,16 @@ def _diluted_from_consolidated(session, scripcode: str, qtr_id: str, name: str, 
     if not isinstance(data, list) or not data:
         return None
     fields = {str(r.get("Description", "")).strip().lower(): r.get("Amount") for r in data}
-    return _pick(fields, "date begin"), _pick(fields, "date end"), _pick_diluted(fields)
+    return _pick(fields, "date begin"), _pick(fields, "date end"), _pick_eps(fields, eps_type)
 
 
 def _pick(fields: dict, key: str):
     return fields.get(key)
 
 
-def _pick_diluted(fields: dict) -> float | None:
+def _pick_eps(fields: dict, eps_type: str = "diluted") -> float | None:
     """
-    Return the filed diluted EPS. Prefers explicit diluted rows; falls back to a
-    generically-labeled EPS row (some companies file only a combined figure).
-    Blank placeholders ('-', '') parse to None and are skipped.
+    Return the filed basic or diluted EPS based on eps_type.
     """
     def _num(raw):
         try:
@@ -162,52 +160,76 @@ def _pick_diluted(fields: dict) -> float | None:
         except (ValueError, AttributeError):
             return None
 
-    # 1. Explicit diluted rows (banks, most large caps).
-    for key in ("diluted eps after extraordinary items",
-                "diluted eps before extraordinary items"):
-        val = _num(fields.get(key))
-        if val is not None:
-            return val
-
-    # 2. Any other row whose label mentions diluted EPS.
-    for key, raw in fields.items():
-        if "diluted" in key and ("eps" in key or "per share" in key or "earning" in key):
-            val = _num(raw)
+    if eps_type == "basic":
+        # 1. Explicit basic rows
+        for key in ("basic eps after extraordinary items",
+                    "basic eps before extraordinary items"):
+            val = _num(fields.get(key))
             if val is not None:
                 return val
 
-    # 3. Generic EPS row (combined basic/diluted) as a last resort.
-    for key, raw in fields.items():
-        if key.startswith("eps") or "earnings per share" in key or "eps after" in key or "eps before" in key:
-            val = _num(raw)
+        # 2. Any other row whose label mentions basic EPS.
+        for key, raw in fields.items():
+            if "basic" in key and ("eps" in key or "per share" in key or "earning" in key):
+                val = _num(raw)
+                if val is not None:
+                    return val
+
+        # 3. Generic EPS row
+        for key, raw in fields.items():
+            if key.startswith("eps") or "earnings per share" in key or "eps after" in key or "eps before" in key:
+                val = _num(raw)
+                if val is not None:
+                    return val
+        return None
+    else:
+        # 1. Explicit diluted rows (banks, most large caps).
+        for key in ("diluted eps after extraordinary items",
+                    "diluted eps before extraordinary items"):
+            val = _num(fields.get(key))
             if val is not None:
                 return val
 
-    return None
+        # 2. Any other row whose label mentions diluted EPS.
+        for key, raw in fields.items():
+            if "diluted" in key and ("eps" in key or "per share" in key or "earning" in key):
+                val = _num(raw)
+                if val is not None:
+                    return val
+
+        # 3. Generic EPS row (combined basic/diluted) as a last resort.
+        for key, raw in fields.items():
+            if key.startswith("eps") or "earnings per share" in key or "eps after" in key or "eps before" in key:
+                val = _num(raw)
+                if val is not None:
+                    return val
+
+        return None
 
 
 def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
                               from_q: tuple[int, int], to_q: tuple[int, int],
-                              consolidated: bool = True, deadline: float = None) -> dict:
+                              consolidated: bool = True, deadline: float = None,
+                              eps_type: str = "diluted") -> dict:
     """
-    Returns {quarter_label: {"value": float, "kind": "Diluted", "xbrl": False,
+    Returns {quarter_label: {"value": float, "kind": kind, "xbrl": False,
     "source": "BSE API"}} for filed quarters in [from_q, to_q]. Walks BSE's Qtr
     ids newest-first and stops when the range is covered or the deadline is hit.
     """
+    eps_type = (eps_type or "diluted").lower()
     scripcode = str(scripcode or "").split(".")[0].strip()
     results: dict[str, dict] = {}
     if not scripcode or not scripcode.isdigit():
         return results
 
     # Serve everything already cached from earlier requests up-front, and only
-    # go to the (slow, rate-limited) API for quarters still missing. Cached
-    # values survive later throttling instead of flipping back to Screener.
+    # go to the API for quarters still missing.
     requested = _quarters_in_range(from_q, to_q)
     for label in requested:
-        cached = _CACHE.get((scripcode, label, consolidated))
+        cached = _CACHE.get((scripcode, label, consolidated, eps_type))
         if cached is not None:
             results[label] = cached
-    if all((scripcode, l, consolidated) in _CACHE for l in requested):
+    if all((scripcode, l, consolidated, eps_type) in _CACHE for l in requested):
         return results
 
     session = requests.Session()
@@ -218,9 +240,6 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
         logger.info(f"No BSE Qtr id found for scripcode {scripcode}.")
         return results
 
-    # The latest whole-number id is the most recent quarter; each id one lower is
-    # the quarter before it. We need at most (quarters between to_q and from_q)
-    # + a little slack, capped so we never scan a company's whole history.
     span = (to_q[0] - from_q[0]) * 4 + (to_q[1] - from_q[1]) // 3
     n_ids = min(max(span + 3, 4), 20)
     latest_int = int(latest)
@@ -229,13 +248,12 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
     def _fetch(qtr_id: str):
         try:
             if consolidated:
-                return qtr_id, _diluted_from_consolidated(session, scripcode, qtr_id, company_name, deadline)
-            return qtr_id, _diluted_from_standalone(session, scripcode, qtr_id, deadline)
+                return qtr_id, _eps_from_consolidated(session, scripcode, qtr_id, company_name, deadline, eps_type)
+            return qtr_id, _eps_from_standalone(session, scripcode, qtr_id, deadline, eps_type)
         except Exception as e:
             logger.warning(f"BSE API error for scrip {scripcode} qtr {qtr_id}: {e}")
             return qtr_id, None
 
-    # BSE's API is slow per call, so fetch the candidate quarters concurrently.
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(_fetch, qid) for qid in candidate_ids]
         for fut in as_completed(futures):
@@ -252,12 +270,16 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
                 continue
             if not (from_q <= q <= to_q):
                 continue
-            cache_key = (scripcode, label, consolidated)
+            cache_key = (scripcode, label, consolidated, eps_type)
+            kind = "Basic" if eps_type == "basic" else "Diluted"
             if value is not None:
-                info = {"value": value, "kind": "Diluted", "xbrl": False, "source": "BSE API"}
+                info = {"value": value, "kind": kind, "xbrl": False, "source": f"BSE API ({kind})"}
                 _CACHE[cache_key] = info
                 results[label] = info
             else:
                 _CACHE[cache_key] = None
 
     return results
+
+fetch_eps_bse_api = fetch_diluted_eps_bse_api
+

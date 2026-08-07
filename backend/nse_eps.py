@@ -28,10 +28,10 @@ BROWSER_HEADERS = {
 _MONTHS = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
            7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
 
-# Filed results never change once published; cache per (symbol, label, basis)
+# Filed results never change once published; cache per (symbol, label, basis, eps_type)
 # for the process lifetime. None records a definitive miss (filing list fetched
 # fine but no usable XBRL for that quarter); transient failures aren't cached.
-_NSE_CACHE: dict[tuple[str, str, bool], dict | None] = {}
+_NSE_CACHE: dict[tuple[str, str, bool, str], dict | None] = {}
 
 # Diluted-EPS XBRL tags in order of preference (namespace prefixes vary across
 # taxonomy versions, so tags are matched with any prefix).
@@ -42,6 +42,13 @@ _DILUTED_TAG_PATTERNS = [
     r"DilutedEarningsPerShare",
 ]
 
+_BASIC_TAG_PATTERNS = [
+    r"BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations",
+    r"BasicEarningsLossPerShareFromContinuingOperations",
+    r"BasicEarningsPerShareAfterExtraordinaryItems",
+    r"BasicEarningsPerShare",
+]
+
 
 def _seconds_left(deadline: float | None) -> float | None:
     if deadline is None:
@@ -49,9 +56,9 @@ def _seconds_left(deadline: float | None) -> float | None:
     return deadline - time.monotonic()
 
 
-def _parse_xbrl_diluted(xml: str, from_date: datetime, to_date: datetime) -> float | None:
+def _parse_xbrl_eps(xml: str, from_date: datetime, to_date: datetime, eps_type: str = "diluted") -> float | None:
     """
-    Extracts the diluted EPS fact whose XBRL context period exactly matches the
+    Extracts the basic or diluted EPS fact whose XBRL context period exactly matches the
     filing's reporting period (so quarter figures are never confused with the
     YTD or previous-period columns that share the same document).
     """
@@ -65,7 +72,9 @@ def _parse_xbrl_diluted(xml: str, from_date: datetime, to_date: datetime) -> flo
 
     target = (from_date.strftime("%Y-%m-%d"), to_date.strftime("%Y-%m-%d"))
 
-    for tag_pattern in _DILUTED_TAG_PATTERNS:
+    tag_patterns = _BASIC_TAG_PATTERNS if eps_type == "basic" else _DILUTED_TAG_PATTERNS
+
+    for tag_pattern in tag_patterns:
         fact_re = re.compile(
             r"<[\w.-]+:" + tag_pattern + r'\b[^>]*contextRef="([^"]+)"[^>]*>([^<]*)<'
         )
@@ -90,13 +99,15 @@ def _parse_xbrl_diluted(xml: str, from_date: datetime, to_date: datetime) -> flo
 
 
 def fetch_diluted_eps_nse(symbol: str, from_q: tuple[int, int], to_q: tuple[int, int],
-                          consolidated: bool = True, deadline: float = None) -> dict:
+                          consolidated: bool = True, deadline: float = None,
+                          eps_type: str = "diluted") -> dict:
     """
-    Returns {quarter_label: {"value": float, "kind": "Diluted", "xbrl": True}}
+    Returns {quarter_label: {"value": float, "kind": kind, "xbrl": True}}
     for every quarter in [from_q, to_q] that has a filed XBRL result on NSE.
     Quarters are processed newest-first and the lookup stops when `deadline`
     (time.monotonic() timestamp) runs out; whatever was resolved is returned.
     """
+    eps_type = (eps_type or "diluted").lower()
     symbol = (symbol or "").strip().upper()
     results: dict[str, dict] = {}
     if not symbol:
@@ -151,7 +162,7 @@ def fetch_diluted_eps_nse(symbol: str, from_q: tuple[int, int], to_q: tuple[int,
 
     # Newest quarters first so the most relevant data survives a tight budget.
     for label, (q, from_dt, to_dt, xbrl_url) in sorted(filings.items(), key=lambda kv: kv[1][0], reverse=True):
-        cache_key = (symbol, label, consolidated)
+        cache_key = (symbol, label, consolidated, eps_type)
         if cache_key in _NSE_CACHE:
             cached = _NSE_CACHE[cache_key]
             if cached is not None:
@@ -168,9 +179,10 @@ def fetch_diluted_eps_nse(symbol: str, from_q: tuple[int, int], to_q: tuple[int,
                               timeout=15 if remaining is None else min(15, remaining))
             if xr.status_code != 200:
                 continue
-            value = _parse_xbrl_diluted(xr.text, from_dt, to_dt)
+            value = _parse_xbrl_eps(xr.text, from_dt, to_dt, eps_type)
+            kind = "Basic" if eps_type == "basic" else "Diluted"
             if value is not None:
-                info = {"value": value, "kind": "Diluted", "xbrl": True, "source": "NSE XBRL"}
+                info = {"value": value, "kind": kind, "xbrl": True, "source": f"NSE XBRL ({kind})"}
                 _NSE_CACHE[cache_key] = info
                 results[label] = info
             else:
@@ -180,3 +192,6 @@ def fetch_diluted_eps_nse(symbol: str, from_q: tuple[int, int], to_q: tuple[int,
             logger.warning(f"NSE XBRL fetch/parse failed for {symbol} {label}: {e}")
 
     return results
+
+fetch_eps_nse = fetch_diluted_eps_nse
+

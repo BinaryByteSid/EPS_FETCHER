@@ -41,6 +41,7 @@ class EPSRequest(BaseModel):
     from_quarter: str = Field(..., description="Starting quarter, e.g. Mar 2023", example="Mar 2023")
     to_quarter: str = Field(..., description="Ending quarter, e.g. Mar 2026", example="Mar 2026")
     consolidated: bool = Field(True, description="Whether to fetch consolidated or standalone figures")
+    eps_type: str = Field("diluted", description="EPS type to fetch: 'basic' or 'diluted'")
 
 
 def _normalize_symbol_inputs(req: EPSRequest) -> list[str]:
@@ -70,14 +71,16 @@ def _build_row_from_query(query: str, filtered: list[dict]) -> dict:
     return row_dict
 
 
-def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter: str, to_quarter: str, deadline: float = None) -> tuple[list[dict], list[dict]]:
+def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter: str, to_quarter: str, deadline: float = None, eps_type: str = "diluted") -> tuple[list[dict], list[dict]]:
     """
-    Scrapes Screener, fetches PDF EPS for the requested range and their YoY previous quarters,
+    Scrapes Screener, fetches basic or diluted EPS for the requested range and their YoY previous quarters,
     enriches them, and returns (all_records, filtered_records).
     """
     from backend.bse_eps import fetch_diluted_eps_bse
     from backend.nse_eps import fetch_diluted_eps_nse
     from backend.bse_results_api import fetch_diluted_eps_bse_api
+
+    eps_type = (eps_type or "diluted").lower()
 
     records = scrape_screener_quarters(resolved["symbol"], consolidated)
     filtered = filter_quarters(records, from_quarter, to_quarter)
@@ -112,25 +115,24 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
         def _still_missing() -> bool:
             return any(q not in eps_map for q in quarters_to_enrich)
 
-        # Primary source: BSE's structured results API. Covers recent quarters
-        # (2025-26) that NSE's XBRL feed still lags on, returns consolidated OR
-        # standalone diluted EPS as structured JSON, and needs no PDF parsing.
+        # Primary source: BSE's structured results API.
         try:
             api_map = fetch_diluted_eps_bse_api(
                 resolved.get("bse", ""), resolved.get("name", resolved["symbol"]),
-                min_q, max_q, consolidated=consolidated, deadline=deadline
+                min_q, max_q, consolidated=consolidated, deadline=deadline,
+                eps_type=eps_type
             )
             eps_map.update(api_map)
         except Exception as e:
             print(f"Warning: BSE results-API EPS fetch failed for {resolved['symbol']}: {e}")
 
-        # Fallback 1: NSE structured XBRL, for any quarter BSE's API didn't return
-        # (e.g. throttled) — exact filed figures, immune to corrupt PDF text.
+        # Fallback 1: NSE structured XBRL.
         if _still_missing():
             try:
                 nse_map = fetch_diluted_eps_nse(
                     resolved["symbol"], min_q, max_q,
-                    consolidated=consolidated, deadline=deadline
+                    consolidated=consolidated, deadline=deadline,
+                    eps_type=eps_type
                 )
                 for q_label, info in nse_map.items():
                     eps_map.setdefault(q_label, info)
@@ -139,7 +141,6 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
 
         # Fallback 2: BSE result PDFs, only for quarters still unresolved.
         if _still_missing():
-            # Screener's basic EPS anchors the PDF extraction (see bse_eps).
             expected_basic = {
                 r["Quarter"]: r["EPS in Rs"] for r in records
                 if isinstance(r.get("EPS in Rs"), (int, float))
@@ -151,7 +152,8 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
                     to_q=max_q,
                     consolidated=consolidated,
                     deadline=deadline,
-                    expected_basic=expected_basic
+                    expected_basic=expected_basic,
+                    eps_type=eps_type
                 )
                 for q_label, info in bse_map.items():
                     eps_map.setdefault(q_label, info)
@@ -166,10 +168,10 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
                 r["EPS in Rs"] = info["value"]
                 r["EPS Source"] = info.get("source") or ("NSE XBRL" if info.get("xbrl") else "BSE PDF")
             else:
-                r["EPS Source"] = "screener"
+                r["EPS Source"] = "screener (basic)" if eps_type == "basic" else "screener"
     else:
         for r in records:
-            r["EPS Source"] = "screener"
+            r["EPS Source"] = "screener (basic)" if eps_type == "basic" else "screener"
 
     # Re-filter to get updated filtered records
     filtered_enriched = filter_quarters(records, from_quarter, to_quarter)
@@ -251,7 +253,7 @@ def fetch_eps(req: EPSRequest):
                 # Each company gets its own full PDF budget.
                 deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
                 resolved = resolve_company(query)
-                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline)
+                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type)
                 
                 if not filtered:
                     continue
@@ -373,7 +375,8 @@ def export_excel(req: EPSRequest):
                 
         output.seek(0)
         
-        filename = f"Quarterly_EPS_{'consolidated' if req.consolidated else 'standalone'}_{req.from_quarter.replace(' ', '')}_to_{req.to_quarter.replace(' ', '')}.xlsx"
+        eps_label = req.eps_type if req.eps_type in ('basic', 'diluted') else 'diluted'
+        filename = f"Quarterly_EPS_{eps_label}_{'consolidated' if req.consolidated else 'standalone'}_{req.from_quarter.replace(' ', '')}_to_{req.to_quarter.replace(' ', '')}.xlsx"
         
         return StreamingResponse(
             output,
@@ -402,7 +405,8 @@ def api_scrape(
     symbol: str,
     consolidated: bool = True,
     from_quarter: str = None,
-    to_quarter: str = None
+    to_quarter: str = None,
+    eps_type: str = "diluted"
 ):
     """
     Scrapes quarterly financials for a single company, generates comparisons,
@@ -423,7 +427,7 @@ def api_scrape(
 
         deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
 
-        records, filtered = scrape_and_enrich_quarters(resolved, consolidated, from_quarter, to_quarter, deadline=deadline)
+        records, filtered = scrape_and_enrich_quarters(resolved, consolidated, from_quarter, to_quarter, deadline=deadline, eps_type=eps_type)
         comparison = generate_yoy_comparison(records, filtered)
         
         # Fetch month-end stock prices
@@ -441,7 +445,8 @@ def api_scrape(
             "records": filtered,
             "comparison": comparison,
             "prices": prices,
-            "notes": notes
+            "notes": notes,
+            "eps_type": eps_type
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -458,7 +463,8 @@ def api_export(
     symbols: list[str] = Query(...),
     from_quarter: str = Query(...),
     to_quarter: str = Query(...),
-    consolidated: bool = Query(True)
+    consolidated: bool = Query(True),
+    eps_type: str = Query("diluted")
 ):
     """
     FastAPI GET endpoint for exporting pivoted Excel data.
@@ -468,7 +474,8 @@ def api_export(
         symbols=symbols,
         from_quarter=from_quarter,
         to_quarter=to_quarter,
-        consolidated=consolidated
+        consolidated=consolidated,
+        eps_type=eps_type
     )
     return export_excel(req)
 
