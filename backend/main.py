@@ -53,7 +53,11 @@ def _normalize_symbol_inputs(req: EPSRequest) -> list[str]:
     return symbol_list
 
 
-def _build_row_from_query(query: str, filtered: list[dict]) -> dict:
+def _build_row_from_query(query: str, filtered: list[dict], field: str = "EPS in Rs") -> dict:
+    """
+    Builds a pivoted row (company metadata + one value per quarter) for the given
+    record field — "EPS in Rs" for the EPS pivot, "Net Profit" for the PAT pivot.
+    """
     meta = resolve_company(query)
     query_clean = query.strip().upper()
     isin_value = meta["isin"] or (query_clean if len(query_clean) == 12 and query_clean.startswith("IN") else "N/A")
@@ -66,7 +70,7 @@ def _build_row_from_query(query: str, filtered: list[dict]) -> dict:
 
     for rec in filtered:
         q = rec["Quarter"]
-        row_dict[q] = rec["EPS in Rs"]
+        row_dict[q] = rec.get(field)
 
     return row_dict
 
@@ -169,9 +173,18 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
                 r["EPS Source"] = info.get("source") or ("NSE XBRL" if info.get("xbrl") else "BSE PDF")
             else:
                 r["EPS Source"] = "screener (basic)" if eps_type == "basic" else "screener"
+
+            # Filed Profit After Tax rides along in the same BSE-API filing as
+            # the diluted EPS; override Screener's net profit with it when present.
+            if info is not None and info.get("pat") is not None:
+                r["Net Profit"] = info["pat"]
+                r["PAT Source"] = info.get("source") or "BSE API"
+            else:
+                r["PAT Source"] = "screener"
     else:
         for r in records:
             r["EPS Source"] = "screener (basic)" if eps_type == "basic" else "screener"
+            r["PAT Source"] = "screener"
 
     # Re-filter to get updated filtered records
     filtered_enriched = filter_quarters(records, from_quarter, to_quarter)
@@ -244,6 +257,7 @@ def fetch_eps(req: EPSRequest):
         symbol_list = _normalize_symbol_inputs(req)
 
         rows = []
+        pat_rows = []
         company_entries = []
         all_quarters_set = set()
         warnings = []
@@ -254,11 +268,12 @@ def fetch_eps(req: EPSRequest):
                 deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
                 resolved = resolve_company(query)
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type)
-                
+
                 if not filtered:
                     continue
 
                 row_dict = _build_row_from_query(query, filtered)
+                pat_row = _build_row_from_query(query, filtered, field="Net Profit")
                 company_entries.append({
                     "query": query,
                     "resolved": resolved,
@@ -267,19 +282,21 @@ def fetch_eps(req: EPSRequest):
                 for rec in filtered:
                     all_quarters_set.add(rec["Quarter"])
                 rows.append(row_dict)
+                pat_rows.append(pat_row)
             except Exception as e:
                 warnings.append(f"Error fetching '{query}': {str(e)}")
-                
+
         if not rows:
             raise Exception("Failed to fetch data for all requested companies:\n" + "\n".join(warnings))
-            
+
         # Sort quarters chronologically
         sorted_quarters = sorted(list(all_quarters_set), key=parse_quarter)
-        
+
         return {
             "status": "success",
             "quarters": sorted_quarters,
             "rows": rows,
+            "pat_rows": pat_rows,
             "warnings": warnings
         }
     except Exception as e:
@@ -295,6 +312,7 @@ def export_excel(req: EPSRequest):
         symbol_list = _normalize_symbol_inputs(req)
 
         rows = []
+        pat_rows = []
         company_entries = []
         all_quarters_set = set()
         warnings = []
@@ -304,12 +322,13 @@ def export_excel(req: EPSRequest):
                 # Each company gets its own full PDF budget.
                 deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
                 resolved = resolve_company(query)
-                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline)
-                
+                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type)
+
                 if not filtered:
                     continue
 
                 row_dict = _build_row_from_query(query, filtered)
+                pat_row = _build_row_from_query(query, filtered, field="Net Profit")
                 company_entries.append({
                     "query": query,
                     "resolved": resolved,
@@ -318,6 +337,7 @@ def export_excel(req: EPSRequest):
                 for rec in filtered:
                     all_quarters_set.add(rec["Quarter"])
                 rows.append(row_dict)
+                pat_rows.append(pat_row)
             except Exception as e:
                 warnings.append(f"Error fetching '{query}': {str(e)}")
                 
@@ -334,44 +354,36 @@ def export_excel(req: EPSRequest):
             stock_row.update(price_map)
             stock_rows.append(stock_row)
         
-        # Create DataFrame
+        # Create DataFrames
         df = pd.DataFrame(rows)
+        pat_df = pd.DataFrame(pat_rows)
         price_df = pd.DataFrame(stock_rows)
-        
+
         # Enforce column order: Symbol, BSE, ISIN, followed by chronological quarters
         cols_order = ["Symbol", "BSE", "ISIN"] + sorted_quarters
-        # Handle cases where some quarters are missing columns in df
-        for col in cols_order:
-            if col not in df.columns:
-                df[col] = None
-        df = df[cols_order]
-        
-        # Rename header columns for clarity
-        df.rename(columns={
-            "BSE": "BSE Code",
-            "ISIN": "ISIN"
-        }, inplace=True)
 
-        for col in cols_order:
-            if col not in price_df.columns:
-                price_df[col] = None
-        price_df = price_df[cols_order]
-        price_df.rename(columns={
-            "BSE": "BSE Code",
-            "ISIN": "ISIN"
-        }, inplace=True)
-        
+        def _shape(frame):
+            for col in cols_order:
+                if col not in frame.columns:
+                    frame[col] = None
+            frame = frame[cols_order]
+            frame.rename(columns={"BSE": "BSE Code", "ISIN": "ISIN"}, inplace=True)
+            return frame
+
+        df = _shape(df)
+        pat_df = _shape(pat_df)
+        price_df = _shape(price_df)
+
+        eps_sheet = f"Quarterly EPS ({'Basic' if req.eps_type == 'basic' else 'Diluted'})"
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Quarterly EPS')
+            df.to_excel(writer, index=False, sheet_name=eps_sheet)
+            pat_df.to_excel(writer, index=False, sheet_name='Quarterly PAT (Cr)')
             price_df.to_excel(writer, index=False, sheet_name='Stock Prices')
-            
-            workbook = writer.book
-            worksheet = writer.sheets['Quarterly EPS']
-            price_worksheet = writer.sheets['Stock Prices']
 
-            _style_excel_sheet(worksheet, df)
-            _style_excel_sheet(price_worksheet, price_df)
+            _style_excel_sheet(writer.sheets[eps_sheet], df)
+            _style_excel_sheet(writer.sheets['Quarterly PAT (Cr)'], pat_df)
+            _style_excel_sheet(writer.sheets['Stock Prices'], price_df)
                 
         output.seek(0)
         

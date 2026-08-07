@@ -130,7 +130,8 @@ def _eps_from_standalone(session, scripcode: str, qtr_id: str, deadline, eps_typ
         return None
     rows = data.get("table1") or []
     fields = {str(r.get("fld_desc", "")).strip().lower(): r.get("Value") for r in rows}
-    return _pick(fields, "date begin"), _pick(fields, "date end"), _pick_eps(fields, eps_type)
+    return (_pick(fields, "date begin"), _pick(fields, "date end"),
+            _pick_eps(fields, eps_type), _pick_pat(fields, consolidated=False))
 
 
 def _eps_from_consolidated(session, scripcode: str, qtr_id: str, name: str, deadline, eps_type: str = "diluted"):
@@ -143,11 +144,43 @@ def _eps_from_consolidated(session, scripcode: str, qtr_id: str, name: str, dead
     if not isinstance(data, list) or not data:
         return None
     fields = {str(r.get("Description", "")).strip().lower(): r.get("Amount") for r in data}
-    return _pick(fields, "date begin"), _pick(fields, "date end"), _pick_eps(fields, eps_type)
+    return (_pick(fields, "date begin"), _pick(fields, "date end"),
+            _pick_eps(fields, eps_type), _pick_pat(fields, consolidated=True))
 
 
 def _pick(fields: dict, key: str):
     return fields.get(key)
+
+
+def _pick_pat(fields: dict, consolidated: bool) -> float | None:
+    """
+    Return the filed Profit After Tax in Rs. crore.
+
+    BSE's structured results report absolute amounts in Rs. million, so the
+    figure is divided by 10 to match the Rs. crore convention used everywhere
+    else in the app (Screener, the Net Profit column). For consolidated results
+    the profit attributable to owners (after minority interest and share of
+    associates) is preferred, falling back to the plain net-profit row.
+    """
+    def _num(raw):
+        try:
+            return float(str(raw).replace(",", "").strip())
+        except (ValueError, AttributeError):
+            return None
+
+    if consolidated:
+        keys = ("net profit after mino inter & share of p & l",
+                "net profit (+)/ loss (-) from ordinary activities after tax",
+                "net profit")
+    else:
+        keys = ("net profit (+)/ loss (-) from ordinary activities after tax",
+                "net profit")
+
+    for key in keys:
+        val = _num(fields.get(key))
+        if val is not None:
+            return round(val / 10.0, 2)  # Rs. million -> Rs. crore
+    return None
 
 
 def _pick_eps(fields: dict, eps_type: str = "diluted") -> float | None:
@@ -260,7 +293,7 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
             _qid, got = fut.result()
             if not got:
                 continue
-            begin, end, value = got
+            begin, end, value, pat = got
             label = _label_from_dates(begin, end)
             if not label:
                 continue
@@ -273,7 +306,8 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
             cache_key = (scripcode, label, consolidated, eps_type)
             kind = "Basic" if eps_type == "basic" else "Diluted"
             if value is not None:
-                info = {"value": value, "kind": kind, "xbrl": False, "source": f"BSE API ({kind})"}
+                info = {"value": value, "pat": pat, "kind": kind,
+                        "xbrl": False, "source": f"BSE API ({kind})"}
                 _CACHE[cache_key] = info
                 results[label] = info
             else:
