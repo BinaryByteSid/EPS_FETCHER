@@ -13,7 +13,8 @@ from backend.scraper import (
     parse_quarter,
     resolve_company,
     get_bse_month_end_prices,
-    generate_yoy_comparison
+    generate_yoy_comparison,
+    _isin_kind,
 )
 
 app = FastAPI(title="Quarterly EPS Fetcher & Exporter")
@@ -23,7 +24,15 @@ app = FastAPI(title="Quarterly EPS Fetcher & Exporter")
 # and PDF downloads run in parallel, so a full 13-quarter range normally
 # completes well within this. Quarters that still miss the budget fall back to
 # Screener's basic EPS and are retried (and cached) on the next request.
-PDF_EPS_BUDGET_SECONDS = 240.0
+PDF_EPS_BUDGET_SECONDS = 120.0
+
+# Total wall-clock budget for a whole multi-company request. Without this cap a
+# 10-company pivot would grant each company a fresh PDF budget and could block
+# the single worker for many minutes, so Render's health checks fail and the
+# instance is restarted (looks like a crash). Once this elapses, remaining
+# companies fall back to Screener's figures (cheap) and fill in on a later
+# request via the per-quarter caches.
+MULTI_REQUEST_BUDGET_SECONDS = 200.0
 
 # Enable CORS for development
 app.add_middleware(
@@ -101,6 +110,15 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
 
     eps_type = (eps_type or "diluted").lower()
     yearly = (period or "quarterly").lower() in ("yearly", "annual", "year")
+
+    # A non-equity ISIN survived resolution unchanged (mutual fund / other) — it
+    # is not a listed company, so fail fast with a clear, actionable message
+    # instead of a generic "not found on Screener".
+    kind = _isin_kind(resolved.get("symbol", ""))
+    if kind == "fund":
+        raise Exception(f"'{resolved['symbol']}' is a mutual-fund ISIN (INF…). This tool covers listed companies only; equity ISINs start with 'INE'.")
+    if kind == "other":
+        raise Exception(f"'{resolved['symbol']}' is a non-equity ISIN. This tool covers listed companies only (equity ISINs start with 'INE').")
 
     records = scrape_screener_quarters(resolved["symbol"], consolidated, period=period)
     filtered = filter_quarters(records, from_quarter, to_quarter)
@@ -279,10 +297,14 @@ def fetch_eps(req: EPSRequest):
         all_quarters_set = set()
         warnings = []
 
+        # Shared budget across all companies bounds the whole request; once spent,
+        # later companies get an expired deadline (Screener-only, fast) so the
+        # worker is never blocked long enough to trip Render's health checks.
+        overall_deadline = time.monotonic() + MULTI_REQUEST_BUDGET_SECONDS
+
         for query in symbol_list:
             try:
-                # Each company gets its own full PDF budget.
-                deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
+                deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
@@ -334,10 +356,14 @@ def export_excel(req: EPSRequest):
         all_quarters_set = set()
         warnings = []
 
+        # Shared budget across all companies bounds the whole request; once spent,
+        # later companies get an expired deadline (Screener-only, fast) so the
+        # worker is never blocked long enough to trip Render's health checks.
+        overall_deadline = time.monotonic() + MULTI_REQUEST_BUDGET_SECONDS
+
         for query in symbol_list:
             try:
-                # Each company gets its own full PDF budget.
-                deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
+                deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 

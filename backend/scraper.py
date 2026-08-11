@@ -119,6 +119,23 @@ def _empty_company_meta(query: str) -> dict:
     }
 
 
+def _isin_kind(query: str) -> str | None:
+    """
+    Classifies an ISIN-shaped query by its 3rd character:
+    'equity' (INE…, listed companies), 'fund' (INF…, mutual funds), or
+    'other' (government / other instruments). Returns None if not ISIN-shaped.
+    """
+    q = (query or "").strip().upper()
+    if len(q) == 12 and q[:2] == "IN" and q[2:].isalnum():
+        c = q[2]
+        if c == "E":
+            return "equity"
+        if c == "F":
+            return "fund"
+        return "other"
+    return None
+
+
 def _normalize_name(s: str) -> str:
     """
     Normalises a company name for fuzzy matching: lowercase, punctuation to
@@ -181,11 +198,17 @@ def resolve_company(query: str) -> dict:
         if query_clean and query_clean in (company["symbol"], company["isin"], company["bse"]):
             return company
 
-    # Local fuzzy name match (works offline; more reliable than the BSE search
-    # API, which is often blocked from cloud/datacenter IPs).
-    name_match = _match_by_name(query)
-    if name_match:
-        return name_match
+    # A non-equity ISIN (mutual fund INF…, or government/other) is not a listed
+    # company: don't waste a name scan and a BSE API call that cannot match.
+    if _isin_kind(query_clean) in ("fund", "other"):
+        return _empty_company_meta(query_clean)
+
+    # Fuzzy name match, but only for name-like queries — an ISIN or a numeric BSE
+    # code is a code, not a name, so scanning every company name for it is waste.
+    if not _isin_kind(query_clean) and not query_clean.isdigit():
+        name_match = _match_by_name(query)
+        if name_match:
+            return name_match
 
     try:
         search_url = (
