@@ -1,11 +1,15 @@
 import requests
 from bs4 import BeautifulSoup
-import pdfplumber
 import re
 import io
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+
+# pdfplumber (and its pdfminer backend) is a heavy import — tens of MB of RAM.
+# It is imported lazily inside the PDF-parsing path so it never loads on hosts
+# where the BSE structured API / NSE XBRL already resolve every quarter (the
+# common case), keeping the baseline memory footprint low on small instances.
 
 logger = logging.getLogger("eps-bse")
 
@@ -151,6 +155,7 @@ def _extract_eps_from_pdf(content: bytes, consolidated: bool, quarter_label: str
         except ValueError:
             pass
 
+    import pdfplumber  # lazy: only load the heavy PDF stack when actually parsing
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         if target_year is not None:
             year_found = False

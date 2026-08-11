@@ -550,8 +550,8 @@
         <section class="card" id="search-section">
             <div class="controls-grid" id="single-controls">
                 <div class="input-group">
-                    <label for="symbol-input">Symbol / ISIN / BSE Code</label>
-                    <input type="text" id="symbol-input" class="input-field" placeholder="e.g. RELIANCE, TCS, INE002A01018" value="RELIANCE">
+                    <label for="symbol-input">Name / Symbol / ISIN / BSE Code</label>
+                    <input type="text" id="symbol-input" class="input-field" placeholder="e.g. Reliance Industries, TCS, INE002A01018, 500325" value="RELIANCE">
                 </div>
                 <div class="input-group">
                     <label for="from-q">From Quarter</label>
@@ -590,8 +590,8 @@
             <!-- Multi Company Controls (Hidden by default) -->
             <div class="controls-grid hidden" id="multi-controls">
                 <div class="input-group">
-                    <label for="symbols-input">Symbols (Comma-separated)</label>
-                    <input type="text" id="symbols-input" class="input-field" placeholder="e.g. RELIANCE, TCS, INFy" value="RELIANCE, TCS">
+                    <label for="symbols-input">Up to 10 — Name / Symbol / ISIN / BSE Code (comma-separated)</label>
+                    <input type="text" id="symbols-input" class="input-field" placeholder="e.g. Reliance Industries, TCS, INE009A01021, 500180" value="RELIANCE, TCS">
                 </div>
                 <div class="input-group">
                     <label for="from-q-multi">From Quarter</label>
@@ -797,6 +797,22 @@
             }
         }
 
+        // Parse a fetch Response as JSON, but fail with a clear message when the
+        // body is empty or not JSON — this happens when the server restarts or is
+        // briefly overloaded (returns a truncated/empty response) instead of the
+        // cryptic "Unexpected end of JSON input".
+        async function safeJson(res) {
+            const text = await res.text();
+            if (!text || !text.trim()) {
+                throw new Error("The server sent an empty response — it may be restarting or busy. Please wait a few seconds and try again.");
+            }
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                throw new Error("The server sent an unexpected (non-JSON) response. Please try again in a moment.");
+            }
+        }
+
         async function fetchSingleCompany() {
             clearError();
             showLoading(true);
@@ -818,7 +834,7 @@
                 // First resolve the symbol
                 const resolveRes = await fetch(`${API_BASE}/api/resolve?query=${encodeURIComponent(symbol)}`);
                 if (!resolveRes.ok) throw new Error("Failed to resolve symbol. Please check the network connection.");
-                const companyInfo = await resolveRes.json();
+                const companyInfo = await safeJson(resolveRes);
 
                 // Now scrape
                 let scrapeUrl = `${API_BASE}/api/scrape?symbol=${encodeURIComponent(companyInfo.symbol)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}&period=${encodeURIComponent(period)}`;
@@ -827,10 +843,10 @@
 
                 const scrapeRes = await fetch(scrapeUrl);
                 if (!scrapeRes.ok) {
-                    const errPayload = await scrapeRes.json();
+                    const errPayload = await safeJson(scrapeRes).catch(() => ({}));
                     throw new Error(errPayload.detail || "Scraping failed.");
                 }
-                const data = await scrapeRes.json();
+                const data = await safeJson(scrapeRes);
 
                 // Update UI metadata
                 document.getElementById('company-name').innerText = data.company.name || data.company.symbol;
@@ -991,11 +1007,11 @@
                 });
 
                 if (!res.ok) {
-                    const errPayload = await res.json();
+                    const errPayload = await safeJson(res).catch(() => ({}));
                     throw new Error(errPayload.detail || "Failed to pivot comparison.");
                 }
 
-                const data = await res.json();
+                const data = await safeJson(res);
 
                 const pivotLabel = epsType === 'basic' ? 'Basic' : 'Diluted';
                 const periodWord = period === 'yearly' ? 'Yearly' : 'Quarterly';

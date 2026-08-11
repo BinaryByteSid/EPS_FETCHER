@@ -45,13 +45,26 @@ class EPSRequest(BaseModel):
     period: str = Field("quarterly", description="Reporting period: 'quarterly' or 'yearly'")
 
 
+# Cap on companies compared at once. Each company makes several rate-limited
+# BSE calls, so a larger batch risks the request timing out.
+MAX_COMPANIES = 10
+
+
 def _normalize_symbol_inputs(req: EPSRequest) -> list[str]:
     symbol_list = req.symbols
     if not symbol_list and req.symbol:
         symbol_list = [req.symbol]
     if not symbol_list:
-        raise HTTPException(status_code=400, detail="At least one company symbol must be selected.")
-    return symbol_list
+        raise HTTPException(status_code=400, detail="At least one company must be selected.")
+    # De-duplicate (case-insensitively, preserving order) and cap at MAX_COMPANIES.
+    seen = set()
+    deduped = []
+    for s in symbol_list:
+        key = (s or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(s.strip())
+    return deduped[:MAX_COMPANIES]
 
 
 def _build_row_from_query(query: str, filtered: list[dict], field: str = "EPS in Rs") -> dict:

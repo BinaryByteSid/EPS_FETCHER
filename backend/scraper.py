@@ -1,5 +1,6 @@
 import requests
 import os
+import re
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
@@ -118,20 +119,73 @@ def _empty_company_meta(query: str) -> dict:
     }
 
 
+def _normalize_name(s: str) -> str:
+    """
+    Normalises a company name for fuzzy matching: lowercase, punctuation to
+    spaces, and drops noise words ('limited', 'ltd', 'the', '&', 'and').
+    """
+    s = (s or "").lower()
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    s = re.sub(r"\b(limited|ltd|the|and)\b", " ", s)
+    return " ".join(s.split())
+
+
+def _match_by_name(query: str) -> dict | None:
+    """
+    Resolves a company by (partial) name against COMPANIES_DB. Prefers an exact
+    normalised match, then the shortest name that starts with the query, then the
+    shortest name containing all query tokens. Returns None if nothing matches or
+    the query is too short to be a meaningful name.
+    """
+    q = _normalize_name(query)
+    if len(q) < 3:
+        return None
+    q_tokens = q.split()
+
+    exact = None
+    prefix_best = None      # (name_length, company)
+    tokens_best = None      # (name_length, company)
+
+    for company in COMPANIES_DB:
+        n = _normalize_name(company.get("name", ""))
+        if not n:
+            continue
+        if n == q:
+            exact = company
+            break
+        if n.startswith(q):
+            if prefix_best is None or len(n) < prefix_best[0]:
+                prefix_best = (len(n), company)
+        elif all(tok in n.split() for tok in q_tokens):
+            if tokens_best is None or len(n) < tokens_best[0]:
+                tokens_best = (len(n), company)
+
+    if exact:
+        return exact
+    if prefix_best:
+        return prefix_best[1]
+    if tokens_best:
+        return tokens_best[1]
+    return None
+
+
 def resolve_company(query: str) -> dict:
     """
-    Resolves a user-entered symbol, BSE code, or ISIN to a company metadata record.
-    Prefers the local mapping database, then falls back to BSE's official search API.
+    Resolves a user-entered symbol, ISIN, BSE code, or company name to a company
+    metadata record. Prefers the local mapping database (exact code match, then
+    fuzzy name match), then falls back to BSE's official search API.
     """
     query_clean = query.strip().upper()
 
     for company in COMPANIES_DB:
-        if company["symbol"] == query_clean:
+        if query_clean and query_clean in (company["symbol"], company["isin"], company["bse"]):
             return company
-        if company["isin"] == query_clean:
-            return company
-        if company["bse"] == query_clean:
-            return company
+
+    # Local fuzzy name match (works offline; more reliable than the BSE search
+    # API, which is often blocked from cloud/datacenter IPs).
+    name_match = _match_by_name(query)
+    if name_match:
+        return name_match
 
     try:
         search_url = (
