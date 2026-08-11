@@ -14,11 +14,14 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# Result PDFs are targeted per quarter, but Q4 filings bundle the annual
-# results and investor material (Infosys' runs to ~43 MB / 379 pages); the
-# statutory EPS statements sit within the first ~40 pages.
-MAX_PDF_BYTES = 60 * 1024 * 1024
-MAX_PAGES_PER_PDF = 40
+# Result PDFs are targeted per quarter; the statutory EPS statement sits within
+# the first ~30 pages. The cap is deliberately low: this PDF path is only the
+# third fallback (after the BSE structured API and NSE XBRL), and pdfplumber's
+# memory use scales with file size, so on a 512 MB host a 40-60 MB annual bundle
+# (e.g. Infosys ~43 MB / 379 pages) can OOM-kill the process (exit 137). Skipping
+# those giant bundles trades a rare fallback hit for stability.
+MAX_PDF_BYTES = 15 * 1024 * 1024
+MAX_PAGES_PER_PDF = 30
 
 # Filed results never change once published, so extracted values are cached for
 # the lifetime of the process to avoid re-downloading PDFs on repeat requests.
@@ -156,7 +159,9 @@ def _extract_eps_from_pdf(content: bytes, consolidated: bool, quarter_label: str
             pattern = re.compile(r'\b(' + year_str + r'|' + short_year + r')\b')
             
             for p_idx in range(min(5, len(pdf.pages))):
-                p_text = pdf.pages[p_idx].extract_text() or ""
+                page = pdf.pages[p_idx]
+                p_text = page.extract_text() or ""
+                page.flush_cache()  # release parsed objects; pdfplumber keeps them otherwise
                 if pattern.search(p_text):
                     year_found = True
                     break
@@ -170,7 +175,9 @@ def _extract_eps_from_pdf(content: bytes, consolidated: bool, quarter_label: str
                 re.IGNORECASE,
             )
             for p_idx in range(min(5, len(pdf.pages))):
-                p_text = pdf.pages[p_idx].extract_text() or ""
+                page = pdf.pages[p_idx]
+                p_text = page.extract_text() or ""
+                page.flush_cache()
                 for line in p_text.splitlines():
                     m = _PERIOD_RE.search(line)
                     if m:
@@ -191,28 +198,34 @@ def _extract_eps_from_pdf(content: bytes, consolidated: bool, quarter_label: str
             if remaining is not None and remaining <= 0:
                 completed = False
                 break
-            text = page.extract_text() or ""
-            
-            mode = _page_mode(text.lower())
-            if mode is not None:
-                current_mode = mode
-            else:
-                mode = current_mode
-                
-            if target_kw not in text.lower():
-                continue
-            value = _extract_eps_value(page, expected_basic, eps_type)
-            if value is None:
-                continue
-                
-            if mode == wanted:
-                if any(abs(value - prev) < 0.01 for prev in candidates):
-                    return value, True, False
-                candidates.append(value)
-            else:
-                priority = 1 if mode is None else 0
-                if fallback is None or priority > fallback[0]:
-                    fallback = (priority, value)
+            try:
+                text = page.extract_text() or ""
+
+                mode = _page_mode(text.lower())
+                if mode is not None:
+                    current_mode = mode
+                else:
+                    mode = current_mode
+
+                if target_kw not in text.lower():
+                    continue
+                value = _extract_eps_value(page, expected_basic, eps_type)
+                if value is None:
+                    continue
+
+                if mode == wanted:
+                    if any(abs(value - prev) < 0.01 for prev in candidates):
+                        return value, True, False
+                    candidates.append(value)
+                else:
+                    priority = 1 if mode is None else 0
+                    if fallback is None or priority > fallback[0]:
+                        fallback = (priority, value)
+            finally:
+                # Release the page's parsed-object cache every iteration;
+                # otherwise pdfplumber retains all scanned pages' objects and
+                # memory grows until the host OOM-kills the process.
+                page.flush_cache()
 
     if candidates:
         rounded = [round(v, 2) for v in candidates]
@@ -321,7 +334,9 @@ def fetch_diluted_eps_bse(company: dict, from_q: tuple[int, int], to_q: tuple[in
             return None
         return resp.content
 
-    executor = ThreadPoolExecutor(max_workers=2)
+    # Single worker: never hold two large PDFs (bytes + pdfplumber's exploded
+    # object graph) in memory at once, which is what OOM-kills the 512 MB host.
+    executor = ThreadPoolExecutor(max_workers=1)
     try:
         futures = {executor.submit(_download, url): (label, key)
                    for label, url, key in to_fetch}
