@@ -42,6 +42,7 @@ class EPSRequest(BaseModel):
     to_quarter: str = Field(..., description="Ending quarter, e.g. Mar 2026", example="Mar 2026")
     consolidated: bool = Field(True, description="Whether to fetch consolidated or standalone figures")
     eps_type: str = Field("diluted", description="EPS type to fetch: 'basic' or 'diluted'")
+    period: str = Field("quarterly", description="Reporting period: 'quarterly' or 'yearly'")
 
 
 def _normalize_symbol_inputs(req: EPSRequest) -> list[str]:
@@ -75,18 +76,20 @@ def _build_row_from_query(query: str, filtered: list[dict], field: str = "EPS in
     return row_dict
 
 
-def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter: str, to_quarter: str, deadline: float = None, eps_type: str = "diluted") -> tuple[list[dict], list[dict]]:
+def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter: str, to_quarter: str, deadline: float = None, eps_type: str = "diluted", period: str = "quarterly") -> tuple[list[dict], list[dict]]:
     """
-    Scrapes Screener, fetches basic or diluted EPS for the requested range and their YoY previous quarters,
-    enriches them, and returns (all_records, filtered_records).
+    Scrapes Screener (quarterly or yearly per `period`), fetches basic or diluted
+    EPS for the requested range and their YoY previous periods, enriches them,
+    and returns (all_records, filtered_records).
     """
     from backend.bse_eps import fetch_diluted_eps_bse
     from backend.nse_eps import fetch_diluted_eps_nse
     from backend.bse_results_api import fetch_diluted_eps_bse_api
 
     eps_type = (eps_type or "diluted").lower()
+    yearly = (period or "quarterly").lower() in ("yearly", "annual", "year")
 
-    records = scrape_screener_quarters(resolved["symbol"], consolidated)
+    records = scrape_screener_quarters(resolved["symbol"], consolidated, period=period)
     filtered = filter_quarters(records, from_quarter, to_quarter)
 
     # Identify quarters to enrich: filtered quarters + YoY previous quarters
@@ -119,19 +122,21 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
         def _still_missing() -> bool:
             return any(q not in eps_map for q in quarters_to_enrich)
 
-        # Primary source: BSE's structured results API.
+        # Primary source: BSE's structured results API (quarterly or annual).
         try:
             api_map = fetch_diluted_eps_bse_api(
                 resolved.get("bse", ""), resolved.get("name", resolved["symbol"]),
                 min_q, max_q, consolidated=consolidated, deadline=deadline,
-                eps_type=eps_type
+                eps_type=eps_type, period=period
             )
             eps_map.update(api_map)
         except Exception as e:
             print(f"Warning: BSE results-API EPS fetch failed for {resolved['symbol']}: {e}")
 
-        # Fallback 1: NSE structured XBRL.
-        if _still_missing():
+        # The NSE-XBRL and BSE-PDF fallbacks parse per-quarter filings, so they
+        # only apply to quarterly mode. For yearly, unresolved years fall back to
+        # Screener's annual figures already present on the record.
+        if not yearly and _still_missing():
             try:
                 nse_map = fetch_diluted_eps_nse(
                     resolved["symbol"], min_q, max_q,
@@ -143,8 +148,7 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
             except Exception as e:
                 print(f"Warning: NSE XBRL EPS fetch failed for {resolved['symbol']}: {e}")
 
-        # Fallback 2: BSE result PDFs, only for quarters still unresolved.
-        if _still_missing():
+        if not yearly and _still_missing():
             expected_basic = {
                 r["Quarter"]: r["EPS in Rs"] for r in records
                 if isinstance(r.get("EPS in Rs"), (int, float))
@@ -267,7 +271,7 @@ def fetch_eps(req: EPSRequest):
                 # Each company gets its own full PDF budget.
                 deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
                 resolved = resolve_company(query)
-                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type)
+                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
                 if not filtered:
                     continue
@@ -322,7 +326,7 @@ def export_excel(req: EPSRequest):
                 # Each company gets its own full PDF budget.
                 deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
                 resolved = resolve_company(query)
-                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type)
+                records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
                 if not filtered:
                     continue
@@ -374,21 +378,23 @@ def export_excel(req: EPSRequest):
         pat_df = _shape(pat_df)
         price_df = _shape(price_df)
 
-        eps_sheet = f"Quarterly EPS ({'Basic' if req.eps_type == 'basic' else 'Diluted'})"
+        period_word = "Yearly" if (req.period or "").lower() in ("yearly", "annual", "year") else "Quarterly"
+        eps_sheet = f"{period_word} EPS ({'Basic' if req.eps_type == 'basic' else 'Diluted'})"
+        pat_sheet = f"{period_word} PAT (Cr)"
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name=eps_sheet)
-            pat_df.to_excel(writer, index=False, sheet_name='Quarterly PAT (Cr)')
+            pat_df.to_excel(writer, index=False, sheet_name=pat_sheet)
             price_df.to_excel(writer, index=False, sheet_name='Stock Prices')
 
             _style_excel_sheet(writer.sheets[eps_sheet], df)
-            _style_excel_sheet(writer.sheets['Quarterly PAT (Cr)'], pat_df)
+            _style_excel_sheet(writer.sheets[pat_sheet], pat_df)
             _style_excel_sheet(writer.sheets['Stock Prices'], price_df)
-                
+
         output.seek(0)
-        
+
         eps_label = req.eps_type if req.eps_type in ('basic', 'diluted') else 'diluted'
-        filename = f"Quarterly_EPS_{eps_label}_{'consolidated' if req.consolidated else 'standalone'}_{req.from_quarter.replace(' ', '')}_to_{req.to_quarter.replace(' ', '')}.xlsx"
+        filename = f"{period_word}_EPS_{eps_label}_{'consolidated' if req.consolidated else 'standalone'}_{req.from_quarter.replace(' ', '')}_to_{req.to_quarter.replace(' ', '')}.xlsx"
         
         return StreamingResponse(
             output,
@@ -418,20 +424,21 @@ def api_scrape(
     consolidated: bool = True,
     from_quarter: str = None,
     to_quarter: str = None,
-    eps_type: str = "diluted"
+    eps_type: str = "diluted",
+    period: str = "quarterly"
 ):
     """
-    Scrapes quarterly financials for a single company, generates comparisons,
-    and fetches BSE stock prices.
+    Scrapes quarterly or yearly financials for a single company, generates
+    comparisons, and fetches BSE stock prices.
     """
     try:
         resolved = resolve_company(symbol)
-        raw_records = scrape_screener_quarters(resolved["symbol"], consolidated)
+        raw_records = scrape_screener_quarters(resolved["symbol"], consolidated, period=period)
 
-        # Determine available quarters
+        # Determine available periods
         available_quarters = [r["Quarter"] for r in raw_records]
 
-        # If from/to quarters are not specified, default to full range
+        # If from/to are not specified, default to full range
         if not from_quarter and available_quarters:
             from_quarter = available_quarters[0]
         if not to_quarter and available_quarters:
@@ -439,7 +446,7 @@ def api_scrape(
 
         deadline = time.monotonic() + PDF_EPS_BUDGET_SECONDS
 
-        records, filtered = scrape_and_enrich_quarters(resolved, consolidated, from_quarter, to_quarter, deadline=deadline, eps_type=eps_type)
+        records, filtered = scrape_and_enrich_quarters(resolved, consolidated, from_quarter, to_quarter, deadline=deadline, eps_type=eps_type, period=period)
         comparison = generate_yoy_comparison(records, filtered)
         
         # Fetch month-end stock prices
@@ -458,7 +465,8 @@ def api_scrape(
             "comparison": comparison,
             "prices": prices,
             "notes": notes,
-            "eps_type": eps_type
+            "eps_type": eps_type,
+            "period": period
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -476,7 +484,8 @@ def api_export(
     from_quarter: str = Query(...),
     to_quarter: str = Query(...),
     consolidated: bool = Query(True),
-    eps_type: str = Query("diluted")
+    eps_type: str = Query("diluted"),
+    period: str = Query("quarterly")
 ):
     """
     FastAPI GET endpoint for exporting pivoted Excel data.
@@ -487,7 +496,8 @@ def api_export(
         from_quarter=from_quarter,
         to_quarter=to_quarter,
         consolidated=consolidated,
-        eps_type=eps_type
+        eps_type=eps_type,
+        period=period
     )
     return export_excel(req)
 

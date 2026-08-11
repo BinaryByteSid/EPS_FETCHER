@@ -562,6 +562,13 @@
                     <input type="text" id="to-q" class="input-field" placeholder="e.g. Mar 2026" value="Mar 2026">
                 </div>
                 <div class="input-group">
+                    <label for="period">Period</label>
+                    <select id="period" class="select-field">
+                        <option value="quarterly" selected>Quarterly</option>
+                        <option value="yearly">Yearly</option>
+                    </select>
+                </div>
+                <div class="input-group">
                     <label for="eps-type">EPS Type</label>
                     <select id="eps-type" class="select-field">
                         <option value="diluted" selected>Diluted</option>
@@ -593,6 +600,13 @@
                 <div class="input-group">
                     <label for="to-q-multi">To Quarter</label>
                     <input type="text" id="to-q-multi" class="input-field" placeholder="e.g. Mar 2026" value="Mar 2026">
+                </div>
+                <div class="input-group">
+                    <label for="period-multi">Period</label>
+                    <select id="period-multi" class="select-field">
+                        <option value="quarterly" selected>Quarterly</option>
+                        <option value="yearly">Yearly</option>
+                    </select>
                 </div>
                 <div class="input-group">
                     <label for="eps-type-multi">EPS Type</label>
@@ -668,12 +682,12 @@
 
             <!-- Detailed Table -->
             <section class="card">
-                <h3 class="section-title" style="margin-bottom: 1.5rem;">Quarterly Performance & YoY Analysis</h3>
+                <h3 class="section-title" id="perf-title" style="margin-bottom: 1.5rem;">Quarterly Performance & YoY Analysis</h3>
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
-                                <th>Quarter</th>
+                                <th id="perf-period-col">Quarter</th>
                                 <th>Sales (₹ Cr)</th>
                                 <th>Sales YoY %</th>
                                 <th>Net Profit / PAT (₹ Cr)</th>
@@ -722,7 +736,7 @@
 
             <section class="card" style="margin-top: 2rem;">
                 <div class="flex-row">
-                    <h3 class="section-title">Pivoted Horizontal PAT Comparison (₹ Cr)</h3>
+                    <h3 class="section-title" id="pat-pivot-title">Quarterly PAT Comparison (₹ Cr)</h3>
                 </div>
 
                 <div class="table-container">
@@ -792,6 +806,7 @@
             const toQ = document.getElementById('to-q').value.trim();
             const consolidated = document.getElementById('consolidated-check').checked;
             const epsType = document.getElementById('eps-type').value;
+            const period = document.getElementById('period').value;
 
             if (!symbol) {
                 showError("Please enter a company symbol, ISIN, or BSE Code.");
@@ -806,7 +821,7 @@
                 const companyInfo = await resolveRes.json();
 
                 // Now scrape
-                let scrapeUrl = `${API_BASE}/api/scrape?symbol=${encodeURIComponent(companyInfo.symbol)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}`;
+                let scrapeUrl = `${API_BASE}/api/scrape?symbol=${encodeURIComponent(companyInfo.symbol)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}&period=${encodeURIComponent(period)}`;
                 if (fromQ) scrapeUrl += `&from_quarter=${encodeURIComponent(fromQ)}`;
                 if (toQ) scrapeUrl += `&to_quarter=${encodeURIComponent(toQ)}`;
 
@@ -828,12 +843,19 @@
                 const comparison = data.comparison;
                 const prices = data.prices || {};
                 
+                // Relabel period-dependent headings (server echoes the period used).
+                const isYearly = (data.period || period) === 'yearly';
+                document.getElementById('perf-title').innerText =
+                    isYearly ? 'Yearly Performance & YoY Analysis' : 'Quarterly Performance & YoY Analysis';
+                document.getElementById('perf-period-col').innerText = isYearly ? 'Year (FY end)' : 'Quarter';
+
                 if (records && records.length > 0) {
                     const latest = records[records.length - 1];
                     document.getElementById('stat-sales').innerText = latest.Sales ? `₹${Number(latest.Sales).toLocaleString('en-IN')}` : 'N/A';
                     document.getElementById('stat-profit').innerText = latest.NetProfit || latest['Net Profit'] ? `₹${Number(latest.NetProfit || latest['Net Profit']).toLocaleString('en-IN')}` : 'N/A';
                     document.getElementById('stat-eps').innerText = latest['EPS in Rs'] ? `₹${latest['EPS in Rs'].toFixed(2)}` : 'N/A';
-                    const epsLabel = epsType === 'basic' ? 'Latest EPS (Basic)' : 'Latest EPS (Diluted)';
+                    const basisWord = isYearly ? 'FY ' : '';
+                    const epsLabel = epsType === 'basic' ? `Latest ${basisWord}EPS (Basic)` : `Latest ${basisWord}EPS (Diluted)`;
                     document.getElementById('stat-eps-label').innerText = epsLabel;
                 } else {
                     document.getElementById('stat-sales').innerText = 'N/A';
@@ -942,6 +964,7 @@
             const toQ = document.getElementById('to-q-multi').value.trim();
             const consolidated = document.getElementById('consolidated-check-multi').checked;
             const epsType = document.getElementById('eps-type-multi').value;
+            const period = document.getElementById('period-multi').value;
 
             if (!symbolsRaw) {
                 showError("Please enter at least one company symbol.");
@@ -962,7 +985,8 @@
                         from_quarter: fromQ,
                         to_quarter: toQ,
                         consolidated: consolidated,
-                        eps_type: epsType
+                        eps_type: epsType,
+                        period: period
                     })
                 });
 
@@ -974,7 +998,9 @@
                 const data = await res.json();
 
                 const pivotLabel = epsType === 'basic' ? 'Basic' : 'Diluted';
-                document.getElementById('pivot-title').innerText = `Pivoted Horizontal EPS Comparison (${pivotLabel})`;
+                const periodWord = period === 'yearly' ? 'Yearly' : 'Quarterly';
+                document.getElementById('pivot-title').innerText = `${periodWord} EPS Comparison (${pivotLabel})`;
+                document.getElementById('pat-pivot-title').innerText = `${periodWord} PAT Comparison (₹ Cr)`;
 
                 // EPS pivot: values are per-share, formatted with a ₹ prefix and 2 decimals.
                 renderPivot('pivot-table-headers', 'pivot-table-body', data.quarters, data.rows,
@@ -997,13 +1023,14 @@
             const toQ = document.getElementById('to-q').value.trim();
             const consolidated = document.getElementById('consolidated-check').checked;
             const epsType = document.getElementById('eps-type').value;
-            
+            const period = document.getElementById('period').value;
+
             if (!symbol || symbol === 'RELIANCE' && document.getElementById('company-name').innerText === 'Reliance Industries Limited' && !document.getElementById('performance-table-body').children.length) {
                 alert("Please analyze a company first.");
                 return;
             }
-            
-            const url = `${API_BASE}/api/export?symbols=${encodeURIComponent(symbol)}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}`;
+
+            const url = `${API_BASE}/api/export?symbols=${encodeURIComponent(symbol)}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}&period=${encodeURIComponent(period)}`;
             window.open(url, '_blank');
         }
 
@@ -1013,16 +1040,17 @@
             const toQ = document.getElementById('to-q-multi').value.trim();
             const consolidated = document.getElementById('consolidated-check-multi').checked;
             const epsType = document.getElementById('eps-type-multi').value;
-            
+            const period = document.getElementById('period-multi').value;
+
             if (!symbolsRaw) {
                 alert("Please enter symbols to export.");
                 return;
             }
-            
+
             const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean);
             let queryStr = symbols.map(s => `symbols=${encodeURIComponent(s)}`).join('&');
-            
-            const url = `${API_BASE}/api/export?${queryStr}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}`;
+
+            const url = `${API_BASE}/api/export?${queryStr}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}&period=${encodeURIComponent(period)}`;
             window.open(url, '_blank');
         }
 

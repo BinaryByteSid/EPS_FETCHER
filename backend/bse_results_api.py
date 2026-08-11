@@ -79,11 +79,15 @@ def _get_json(session, url, deadline):
     return None
 
 
-def _quarters_in_range(from_q: tuple[int, int], to_q: tuple[int, int]) -> list[str]:
-    """All 'Mon YYYY' quarter labels (Mar/Jun/Sep/Dec) within [from_q, to_q]."""
+def _quarters_in_range(from_q: tuple[int, int], to_q: tuple[int, int], yearly: bool = False) -> list[str]:
+    """
+    'Mon YYYY' period labels within [from_q, to_q]. Quarterly yields Mar/Jun/Sep/Dec;
+    yearly yields only the fiscal-year-end label (Mar YYYY) for each year.
+    """
+    months = (3,) if yearly else (3, 6, 9, 12)
     labels = []
     for year in range(from_q[0], to_q[0] + 1):
-        for mon in (3, 6, 9, 12):
+        for mon in months:
             q = (year, mon)
             if from_q <= q <= to_q:
                 labels.append(f"{_MON_LABEL[mon]} {year}")
@@ -104,16 +108,19 @@ def _label_from_dates(begin: str, end: str) -> str | None:
     return f"{_MON_LABEL[mon]} {yr}"
 
 
-def _latest_qtr_id(session, scripcode: str, deadline) -> float | None:
-    """Read the latest quarterly Qtr id from TabResults_PAR."""
+def _latest_id(session, scripcode: str, deadline, keys) -> float | None:
+    """
+    Read a base Qtr id from TabResults_PAR's snapshot links. `keys` is the
+    ordered preference of link fields: ("LLQ","LSQ","LFY") for the latest
+    quarter, ("LFY",) for the latest full financial year.
+    """
     data = _get_json(session, f"{API_BASE}/TabResults_PAR/w?scripcode={scripcode}&tabtype=RESULTS", deadline)
     if not isinstance(data, dict):
         return None
     snap = data.get("resultinS") or []
     if not snap:
         return None
-    # LLQ = latest quarter link, carries qtr=<id> in its URL.
-    for key in ("LLQ", "LSQ", "LFY"):
+    for key in keys:
         link = snap[0].get(key, "")
         m = re.search(r"qtr=([\d.]+)", link)
         if m:
@@ -122,6 +129,11 @@ def _latest_qtr_id(session, scripcode: str, deadline) -> float | None:
             except ValueError:
                 continue
     return None
+
+
+def _latest_qtr_id(session, scripcode: str, deadline) -> float | None:
+    """Latest quarterly Qtr id (LLQ)."""
+    return _latest_id(session, scripcode, deadline, ("LLQ", "LSQ", "LFY"))
 
 
 def _eps_from_standalone(session, scripcode: str, qtr_id: str, deadline, eps_type: str = "diluted"):
@@ -243,40 +255,57 @@ def _pick_eps(fields: dict, eps_type: str = "diluted") -> float | None:
 def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
                               from_q: tuple[int, int], to_q: tuple[int, int],
                               consolidated: bool = True, deadline: float = None,
-                              eps_type: str = "diluted") -> dict:
+                              eps_type: str = "diluted", period: str = "quarterly") -> dict:
     """
-    Returns {quarter_label: {"value": float, "kind": kind, "xbrl": False,
-    "source": "BSE API"}} for filed quarters in [from_q, to_q]. Walks BSE's Qtr
-    ids newest-first and stops when the range is covered or the deadline is hit.
+    Returns {period_label: {"value": float, "pat": float, "kind": kind, ...}}
+    for filed periods in [from_q, to_q]. `period` "quarterly" walks whole-number
+    Qtr ids; "yearly" walks the annual .50 ids (one financial year apart). Walks
+    newest-first and stops when the range is covered or the deadline is hit.
     """
     eps_type = (eps_type or "diluted").lower()
+    yearly = (period or "quarterly").lower() in ("yearly", "annual", "year")
+    period_key = "yearly" if yearly else "quarterly"
     scripcode = str(scripcode or "").split(".")[0].strip()
     results: dict[str, dict] = {}
     if not scripcode or not scripcode.isdigit():
         return results
 
+    # Cache key includes the period because an annual "Mar 2026" (full FY) and a
+    # Q4 "Mar 2026" (quarter only) share the same label but are different values.
+    def _ck(label):
+        return (scripcode, label, consolidated, eps_type, period_key)
+
     # Serve everything already cached from earlier requests up-front, and only
-    # go to the API for quarters still missing.
-    requested = _quarters_in_range(from_q, to_q)
+    # go to the API for periods still missing.
+    requested = _quarters_in_range(from_q, to_q, yearly=yearly)
     for label in requested:
-        cached = _CACHE.get((scripcode, label, consolidated, eps_type))
+        cached = _CACHE.get(_ck(label))
         if cached is not None:
             results[label] = cached
-    if all((scripcode, l, consolidated, eps_type) in _CACHE for l in requested):
+    if all(_ck(l) in _CACHE for l in requested):
         return results
 
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    latest = _latest_qtr_id(session, scripcode, deadline)
-    if latest is None:
-        logger.info(f"No BSE Qtr id found for scripcode {scripcode}.")
-        return results
-
-    span = (to_q[0] - from_q[0]) * 4 + (to_q[1] - from_q[1]) // 3
-    n_ids = min(max(span + 3, 4), 20)
-    latest_int = int(latest)
-    candidate_ids = [f"{latest_int - k}.00" for k in range(n_ids)]
+    if yearly:
+        # Annual roll-up ids end in .50 and step by 4.0 (one year) apart.
+        latest = _latest_id(session, scripcode, deadline, ("LFY", "LLQ"))
+        if latest is None:
+            logger.info(f"No BSE annual id found for scripcode {scripcode}.")
+            return results
+        base = int(latest) + 0.5  # normalise to the nearest .50 annual id
+        n_ids = min(max(to_q[0] - from_q[0] + 2, 3), 15)
+        candidate_ids = [f"{base - 4.0 * k:.2f}" for k in range(n_ids)]
+    else:
+        latest = _latest_qtr_id(session, scripcode, deadline)
+        if latest is None:
+            logger.info(f"No BSE Qtr id found for scripcode {scripcode}.")
+            return results
+        span = (to_q[0] - from_q[0]) * 4 + (to_q[1] - from_q[1]) // 3
+        n_ids = min(max(span + 3, 4), 20)
+        latest_int = int(latest)
+        candidate_ids = [f"{latest_int - k}.00" for k in range(n_ids)]
 
     def _fetch(qtr_id: str):
         try:
@@ -303,7 +332,11 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
                 continue
             if not (from_q <= q <= to_q):
                 continue
-            cache_key = (scripcode, label, consolidated, eps_type)
+            # For yearly, only accept fiscal-year-end (March) periods; a .50 id
+            # that resolves to a non-March end is not an annual roll-up.
+            if yearly and q[1] != 3:
+                continue
+            cache_key = _ck(label)
             kind = "Basic" if eps_type == "basic" else "Diluted"
             if value is not None:
                 info = {"value": value, "pat": pat, "kind": kind,

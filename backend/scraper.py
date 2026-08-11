@@ -285,50 +285,58 @@ def parse_quarter(q_str: str) -> tuple[int, int]:
         
     return year, months[month_key]
 
-def scrape_screener_quarters(symbol: str, consolidated: bool = True) -> list[dict]:
+def scrape_screener_quarters(symbol: str, consolidated: bool = True, period: str = "quarterly") -> list[dict]:
     """
-    Scrapes the quarterly financial data of a company from Screener.in.
-    Returns a list of dicts with keys: Symbol, Quarter, Sales, Net Profit, EPS in Rs.
+    Scrapes financial data of a company from Screener.in.
+    `period` selects the quarterly results table ("quarterly", <section id="quarters">)
+    or the annual profit & loss table ("yearly", <section id="profit-loss">).
+    Returns a list of dicts with keys: Symbol, Quarter (the period label, e.g.
+    'Sep 2024' for a quarter or 'Mar 2024' for FY2024), Sales, Net Profit, EPS in Rs.
     """
     symbol = symbol.strip().upper()
-    
+    period = (period or "quarterly").lower()
+    yearly = period in ("yearly", "annual", "year")
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    
+
     # If consolidated is selected, we request the consolidated page first.
     # Screener has pages like /company/RELIANCE/consolidated/ and fallback /company/RELIANCE/
     if consolidated:
         url = f"https://www.screener.in/company/{symbol}/consolidated/"
     else:
         url = f"https://www.screener.in/company/{symbol}/"
-        
+
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        
+
         # If we got a 404 on the consolidated URL, fall back to standalone
         if consolidated and response.status_code == 404:
             url = f"https://www.screener.in/company/{symbol}/"
             response = requests.get(url, headers=headers, timeout=10)
-            
+
     except requests.RequestException as e:
         raise Exception(f"Network error while connecting to Screener.in: {str(e)}")
-        
+
     if response.status_code == 404:
         raise Exception(f"Company symbol '{symbol}' was not found on Screener.in.")
     elif response.status_code != 200:
         raise Exception(f"Screener.in returned status code {response.status_code} for symbol '{symbol}'.")
-        
+
     soup = BeautifulSoup(response.content, "html.parser")
-    
-    # The quarterly table is inside <section id="quarters">
-    quarters_section = soup.find("section", id="quarters")
-    if not quarters_section:
-        raise Exception(f"Quarterly financials section not found for '{symbol}'. The company might not have quarterly reporting.")
-        
-    table = quarters_section.find("table")
+
+    # Quarterly data lives in <section id="quarters">; annual (FY) data in
+    # <section id="profit-loss">. Both tables share the same row/column layout.
+    section_id = "profit-loss" if yearly else "quarters"
+    data_section = soup.find("section", id=section_id)
+    if not data_section:
+        kind = "Annual (profit & loss)" if yearly else "Quarterly financials"
+        raise Exception(f"{kind} section not found for '{symbol}'. The company might not report it.")
+
+    table = data_section.find("table")
     if not table:
-        raise Exception(f"Quarterly data table not found in quarters section for '{symbol}'.")
+        raise Exception(f"Data table not found in {section_id} section for '{symbol}'.")
         
     # Parse headers (quarter names)
     header_row = None
@@ -396,6 +404,13 @@ def scrape_screener_quarters(symbol: str, consolidated: bool = True) -> list[dic
         
     records = []
     for i, q in enumerate(quarter_names):
+        # Skip non-period columns (the annual table ends with a "TTM" column, and
+        # any header that isn't a 'Mon YYYY' label can't be filtered or priced).
+        try:
+            parse_quarter(q)
+        except ValueError:
+            continue
+
         # Safe access in case row data length is shorter than header length
         s_val = sales_vals[i] if i < len(sales_vals) else ""
         np_val = net_profit_vals[i] if i < len(net_profit_vals) else ""
