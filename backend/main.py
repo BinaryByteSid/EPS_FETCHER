@@ -26,6 +26,12 @@ app = FastAPI(title="Quarterly EPS Fetcher & Exporter")
 # Screener's basic EPS and are retried (and cached) on the next request.
 PDF_EPS_BUDGET_SECONDS = 120.0
 
+# The pdfplumber PDF fallback is the last resort and the main memory hog (it can
+# OOM-kill a small instance). It is off by default so the deployed app stays
+# crash-safe; set ENABLE_PDF_FALLBACK=1 to re-enable it locally. The BSE
+# structured API and NSE XBRL cover the vast majority of companies without it.
+ENABLE_PDF_FALLBACK = os.environ.get("ENABLE_PDF_FALLBACK", "").lower() in ("1", "true", "yes")
+
 # Total wall-clock budget for a whole multi-company request. Without this cap a
 # 10-company pivot would grant each company a fresh PDF budget and could block
 # the single worker for many minutes, so Render's health checks fail and the
@@ -179,7 +185,7 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
             except Exception as e:
                 print(f"Warning: NSE XBRL EPS fetch failed for {resolved['symbol']}: {e}")
 
-        if not yearly and _still_missing():
+        if ENABLE_PDF_FALLBACK and not yearly and _still_missing():
             expected_basic = {
                 r["Quarter"]: r["EPS in Rs"] for r in records
                 if isinstance(r.get("EPS in Rs"), (int, float))
@@ -472,6 +478,16 @@ def api_scrape(
     """
     try:
         resolved = resolve_company(symbol)
+
+        # Free float (public shareholding %) — fetched up front, before the heavy
+        # EPS enrichment hammers (and gets throttled by) the same BSE host.
+        free_float = None
+        try:
+            from backend.bse_results_api import fetch_free_float
+            free_float = fetch_free_float(resolved.get("bse", ""), deadline=time.monotonic() + 10)
+        except Exception as e:
+            print(f"Warning: free-float fetch failed for {resolved['symbol']}: {e}")
+
         raw_records = scrape_screener_quarters(resolved["symbol"], consolidated, period=period)
 
         # Determine available periods
@@ -505,7 +521,8 @@ def api_scrape(
             "prices": prices,
             "notes": notes,
             "eps_type": eps_type,
-            "period": period
+            "period": period,
+            "free_float": free_float
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

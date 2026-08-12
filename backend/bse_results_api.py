@@ -350,3 +350,49 @@ def fetch_diluted_eps_bse_api(scripcode: str, company_name: str,
 
 fetch_eps_bse_api = fetch_diluted_eps_bse_api
 
+
+# Free-float (public shareholding) is filed quarterly and rarely changes within
+# a quarter; cache per scrip for the process lifetime.
+_SHP_CACHE: dict[str, dict | None] = {}
+
+
+def fetch_free_float(scripcode: str, deadline: float = None) -> dict | None:
+    """
+    Returns the latest filed shareholding split for a scrip via BSE's
+    TabResults_SHP endpoint: {"quarter", "free_float" (public %), "promoter" %}.
+    Free float is the public shareholding percentage. Returns None if
+    unavailable. One small (~300 byte) call, cached per scrip.
+    """
+    scripcode = str(scripcode or "").split(".")[0].strip()
+    if not scripcode.isdigit():
+        return None
+    if scripcode in _SHP_CACHE:
+        return _SHP_CACHE[scripcode]
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    data = _get_json(session, f"{API_BASE}/TabResults_SHP/w?scripcode={scripcode}&tabtype=RESULTS", deadline)
+    if not isinstance(data, list) or not data:
+        return None
+
+    def _num(x):
+        try:
+            return float(str(x).replace(",", "").strip())
+        except (ValueError, AttributeError):
+            return None
+
+    # Rows are newest-first, but the most recent quarter may not be filed yet
+    # (all zeros). Use the latest quarter whose split actually sums to ~100%.
+    result = None
+    for row in data:
+        pub, prom = _num(row.get("Public")), _num(row.get("Promoter"))
+        if pub is None or prom is None:
+            continue
+        if pub + prom >= 99.0:  # a filed, complete split
+            result = {"quarter": row.get("Quarter"), "free_float": pub, "promoter": prom}
+            break
+
+    if result is not None:
+        _SHP_CACHE[scripcode] = result
+    return result
+

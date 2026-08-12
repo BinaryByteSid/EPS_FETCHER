@@ -677,6 +677,14 @@
                             <div class="value" id="stat-eps">₹--</div>
                         </div>
                     </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fa-solid fa-chart-pie"></i></div>
+                        <div class="stat-details">
+                            <h3>Free Float (Public %)</h3>
+                            <div class="value" id="stat-freefloat">--</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);" id="stat-freefloat-sub"></div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -864,6 +872,17 @@
                 document.getElementById('perf-title').innerText =
                     isYearly ? 'Yearly Performance & YoY Analysis' : 'Quarterly Performance & YoY Analysis';
                 document.getElementById('perf-period-col').innerText = isYearly ? 'Year (FY end)' : 'Quarter';
+
+                // Free float (public shareholding %)
+                const ff = data.free_float;
+                if (ff && ff.free_float !== null && ff.free_float !== undefined) {
+                    document.getElementById('stat-freefloat').innerText = `${Number(ff.free_float).toFixed(2)}%`;
+                    document.getElementById('stat-freefloat-sub').innerText =
+                        `Promoter ${ff.promoter !== null ? Number(ff.promoter).toFixed(2) + '%' : '--'} · ${ff.quarter || ''}`;
+                } else {
+                    document.getElementById('stat-freefloat').innerText = 'N/A';
+                    document.getElementById('stat-freefloat-sub').innerText = '';
+                }
 
                 if (records && records.length > 0) {
                     const latest = records[records.length - 1];
