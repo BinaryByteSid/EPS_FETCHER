@@ -82,6 +82,17 @@ def _normalize_symbol_inputs(req: EPSRequest) -> list[str]:
     return deduped[:MAX_COMPANIES]
 
 
+def _free_float_value(resolved: dict, deadline: float = None):
+    """Latest public-shareholding % for a company, or None. Cheap and cached."""
+    try:
+        from backend.bse_results_api import fetch_free_float
+        ff = fetch_free_float(resolved.get("bse", ""), deadline=deadline)
+        return ff["free_float"] if ff else None
+    except Exception as e:
+        print(f"Warning: free-float fetch failed for {resolved.get('symbol')}: {e}")
+        return None
+
+
 def _build_row_from_query(query: str, filtered: list[dict], field: str = "EPS in Rs") -> dict:
     """
     Builds a pivoted row (company metadata + one value per quarter) for the given
@@ -312,6 +323,8 @@ def fetch_eps(req: EPSRequest):
             try:
                 deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
+                # Free float first (before EPS enrichment throttles BSE).
+                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
                 if not filtered:
@@ -319,10 +332,13 @@ def fetch_eps(req: EPSRequest):
 
                 row_dict = _build_row_from_query(query, filtered)
                 pat_row = _build_row_from_query(query, filtered, field="Net Profit")
+                row_dict["Free Float %"] = ff_val
+                pat_row["Free Float %"] = ff_val
                 company_entries.append({
                     "query": query,
                     "resolved": resolved,
                     "filtered": filtered,
+                    "free_float": ff_val,
                 })
                 for rec in filtered:
                     all_quarters_set.add(rec["Quarter"])
@@ -371,6 +387,8 @@ def export_excel(req: EPSRequest):
             try:
                 deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
+                # Free float first (before EPS enrichment throttles BSE).
+                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
                 if not filtered:
@@ -378,10 +396,13 @@ def export_excel(req: EPSRequest):
 
                 row_dict = _build_row_from_query(query, filtered)
                 pat_row = _build_row_from_query(query, filtered, field="Net Profit")
+                row_dict["Free Float %"] = ff_val
+                pat_row["Free Float %"] = ff_val
                 company_entries.append({
                     "query": query,
                     "resolved": resolved,
                     "filtered": filtered,
+                    "free_float": ff_val,
                 })
                 for rec in filtered:
                     all_quarters_set.add(rec["Quarter"])
@@ -389,27 +410,28 @@ def export_excel(req: EPSRequest):
                 pat_rows.append(pat_row)
             except Exception as e:
                 warnings.append(f"Error fetching '{query}': {str(e)}")
-                
+
         if not rows:
             raise Exception("No data available to export:\n" + "\n".join(warnings))
-            
+
         # Sort quarters chronologically
         sorted_quarters = sorted(list(all_quarters_set), key=parse_quarter)
 
         stock_rows = []
         for entry in company_entries:
             stock_row = _build_metadata_row(entry["query"], entry["resolved"])
+            stock_row["Free Float %"] = entry.get("free_float")
             price_map = get_bse_month_end_prices(entry["resolved"], sorted_quarters)
             stock_row.update(price_map)
             stock_rows.append(stock_row)
-        
+
         # Create DataFrames
         df = pd.DataFrame(rows)
         pat_df = pd.DataFrame(pat_rows)
         price_df = pd.DataFrame(stock_rows)
 
-        # Enforce column order: Symbol, BSE, ISIN, followed by chronological quarters
-        cols_order = ["Symbol", "BSE", "ISIN"] + sorted_quarters
+        # Enforce column order: Symbol, BSE, ISIN, Free Float %, then quarters
+        cols_order = ["Symbol", "BSE", "ISIN", "Free Float %"] + sorted_quarters
 
         def _shape(frame):
             for col in cols_order:

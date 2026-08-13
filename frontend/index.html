@@ -962,7 +962,7 @@
         // thead/tbody ids. `formatVal` turns a numeric cell into display HTML.
         function renderPivot(headId, bodyId, quarters, rows, formatVal) {
             const thead = document.getElementById(headId);
-            let headerHtml = `<tr><th>Company / Scrip</th><th>BSE Code</th><th>ISIN</th>`;
+            let headerHtml = `<tr><th>Company / Scrip</th><th>BSE Code</th><th>ISIN</th><th>Free Float %</th>`;
             quarters.forEach(q => { headerHtml += `<th>${q}</th>`; });
             headerHtml += `</tr>`;
             thead.innerHTML = headerHtml;
@@ -970,15 +970,18 @@
             const tbody = document.getElementById(bodyId);
             tbody.innerHTML = '';
             if (!rows || rows.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="${quarters.length + 3}" style="text-align: center; color: var(--text-muted);">No pivot comparison data available.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="${quarters.length + 4}" style="text-align: center; color: var(--text-muted);">No pivot comparison data available.</td></tr>`;
                 return;
             }
             rows.forEach(row => {
+                const ff = row['Free Float %'];
+                const ffDisplay = ff !== undefined && ff !== null ? `${Number(ff).toFixed(2)}%` : '--';
                 let rowHtml = `
                     <tr>
                         <td><strong>${row.Symbol}</strong> <span style="font-size: 0.8rem; color: var(--text-muted); block">${row.Name || ''}</span></td>
                         <td>${row.BSE || 'N/A'}</td>
                         <td><span style="font-size: 0.85rem; font-family: monospace;">${row.ISIN || 'N/A'}</span></td>
+                        <td>${ffDisplay}</td>
                 `;
                 quarters.forEach(q => {
                     const val = row[q];
