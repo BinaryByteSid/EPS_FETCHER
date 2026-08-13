@@ -119,6 +119,62 @@ def _empty_company_meta(query: str) -> dict:
     }
 
 
+# Free float derived from Screener's shareholding section, cached per symbol.
+# Populated as a side effect of scrape_screener_quarters (same page fetch), so
+# it needs no extra — and no BSE — request.
+_FREE_FLOAT_CACHE: dict[str, dict] = {}
+
+
+def _parse_promoter_from_soup(soup) -> dict | None:
+    """
+    Reads the latest promoter holding from Screener's <section id="shareholding">
+    and derives free float = 100 − promoter%. Screener's own "Public" row is only
+    retail public (excludes FII/DII), so it is NOT the free float; 100 − promoter
+    is. Returns {"free_float", "promoter", "quarter", "source"} or None.
+    """
+    sec = soup.find("section", id="shareholding")
+    if not sec:
+        return None
+    table = sec.find("table")
+    if not table:
+        return None
+    thead = table.find("thead")
+    headers = [c.get_text(strip=True) for c in thead.find_all(["th", "td"])] if thead else []
+    tbody = table.find("tbody")
+    if not tbody:
+        return None
+
+    for row in tbody.find_all("tr"):
+        cells = row.find_all("td")
+        if not cells:
+            continue
+        label = cells[0].get_text(strip=True).rstrip("+").strip().lower()
+        if not label.startswith("promoter"):
+            continue
+        values = [c.get_text(strip=True) for c in cells[1:]]
+        # Latest (right-most) column that holds a real percentage.
+        for i in range(len(values) - 1, -1, -1):
+            v = values[i].replace("%", "").replace(",", "").strip()
+            try:
+                prom = float(v)
+            except ValueError:
+                continue
+            quarter = headers[i + 1] if i + 1 < len(headers) else None
+            return {
+                "free_float": round(100.0 - prom, 2),
+                "promoter": prom,
+                "quarter": quarter,
+                "source": "screener",
+            }
+        return None
+    return None
+
+
+def get_screener_free_float(symbol: str) -> dict | None:
+    """Free float parsed from the last Screener page fetch for this symbol."""
+    return _FREE_FLOAT_CACHE.get((symbol or "").strip().upper())
+
+
 def _isin_kind(query: str) -> str | None:
     """
     Classifies an ISIN-shaped query by its 3rd character:
@@ -402,6 +458,15 @@ def scrape_screener_quarters(symbol: str, consolidated: bool = True, period: str
         raise Exception(f"Screener.in returned status code {response.status_code} for symbol '{symbol}'.")
 
     soup = BeautifulSoup(response.content, "html.parser")
+
+    # Cache free float from the shareholding section on the same page (no extra
+    # request); used by the API as a reliable source when BSE's SHP is throttled.
+    try:
+        ff = _parse_promoter_from_soup(soup)
+        if ff:
+            _FREE_FLOAT_CACHE[symbol] = ff
+    except Exception:
+        pass
 
     # Quarterly data lives in <section id="quarters">; annual (FY) data in
     # <section id="profit-loss">. Both tables share the same row/column layout.

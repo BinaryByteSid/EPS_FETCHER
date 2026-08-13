@@ -82,15 +82,29 @@ def _normalize_symbol_inputs(req: EPSRequest) -> list[str]:
     return deduped[:MAX_COMPANIES]
 
 
-def _free_float_value(resolved: dict, deadline: float = None):
-    """Latest public-shareholding % for a company, or None. Cheap and cached."""
+def _free_float_info(resolved: dict, deadline: float = None) -> dict | None:
+    """
+    Free float (public shareholding %) as {free_float, promoter, quarter, source}.
+    Primary source is Screener's shareholding section (parsed from the page
+    already fetched for EPS — reliable, no extra request); falls back to BSE's
+    shareholding-pattern API only when Screener didn't have it.
+    """
+    from backend.scraper import get_screener_free_float
+    ff = get_screener_free_float(resolved.get("symbol", ""))
+    if ff and ff.get("free_float") is not None:
+        return ff
     try:
         from backend.bse_results_api import fetch_free_float
-        ff = fetch_free_float(resolved.get("bse", ""), deadline=deadline)
-        return ff["free_float"] if ff else None
+        return fetch_free_float(resolved.get("bse", ""), deadline=deadline)
     except Exception as e:
         print(f"Warning: free-float fetch failed for {resolved.get('symbol')}: {e}")
         return None
+
+
+def _free_float_value(resolved: dict, deadline: float = None):
+    """Just the free-float percentage (or None)."""
+    info = _free_float_info(resolved, deadline=deadline)
+    return info["free_float"] if info else None
 
 
 def _build_row_from_query(query: str, filtered: list[dict], field: str = "EPS in Rs") -> dict:
@@ -323,13 +337,14 @@ def fetch_eps(req: EPSRequest):
             try:
                 deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
-                # Free float first (before EPS enrichment throttles BSE).
-                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
                 if not filtered:
                     continue
 
+                # Free float after enrichment: the Screener page it just fetched
+                # has already populated the free-float cache (no extra request).
+                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 row_dict = _build_row_from_query(query, filtered)
                 pat_row = _build_row_from_query(query, filtered, field="Net Profit")
                 row_dict["Free Float %"] = ff_val
@@ -387,13 +402,14 @@ def export_excel(req: EPSRequest):
             try:
                 deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
-                # Free float first (before EPS enrichment throttles BSE).
-                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
                 if not filtered:
                     continue
 
+                # Free float after enrichment: the Screener page it just fetched
+                # has already populated the free-float cache (no extra request).
+                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 row_dict = _build_row_from_query(query, filtered)
                 pat_row = _build_row_from_query(query, filtered, field="Net Profit")
                 row_dict["Free Float %"] = ff_val
@@ -501,16 +517,12 @@ def api_scrape(
     try:
         resolved = resolve_company(symbol)
 
-        # Free float (public shareholding %) — fetched up front, before the heavy
-        # EPS enrichment hammers (and gets throttled by) the same BSE host.
-        free_float = None
-        try:
-            from backend.bse_results_api import fetch_free_float
-            free_float = fetch_free_float(resolved.get("bse", ""), deadline=time.monotonic() + 10)
-        except Exception as e:
-            print(f"Warning: free-float fetch failed for {resolved['symbol']}: {e}")
-
         raw_records = scrape_screener_quarters(resolved["symbol"], consolidated, period=period)
+
+        # Free float (public shareholding %). The scrape above already parsed it
+        # from Screener's shareholding section (no extra request); BSE's SHP API
+        # is only a fallback inside _free_float_info.
+        free_float = _free_float_info(resolved, deadline=time.monotonic() + 10)
 
         # Determine available periods
         available_quarters = [r["Quarter"] for r in raw_records]
