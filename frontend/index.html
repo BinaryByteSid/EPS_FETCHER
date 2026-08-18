@@ -703,6 +703,7 @@
                                 <th>PAT Source</th>
                                 <th>EPS (₹)</th>
                                 <th>EPS YoY %</th>
+                                <th>Free Float %</th>
                                 <th>BSE End Price</th>
                                 <th>EPS Source</th>
                             </tr>
@@ -753,6 +754,23 @@
                             <!-- Populated dynamically -->
                         </thead>
                         <tbody id="pat-pivot-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="card" style="margin-top: 2rem;">
+                <div class="flex-row">
+                    <h3 class="section-title" id="ff-pivot-title">Quarterly Free Float % (Public)</h3>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead id="ff-pivot-headers">
+                            <!-- Populated dynamically -->
+                        </thead>
+                        <tbody id="ff-pivot-body">
                             <!-- Populated dynamically -->
                         </tbody>
                     </table>
@@ -903,7 +921,7 @@
                 tbody.innerHTML = '';
 
                 if (!records || records.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">No records found for the specified range.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: var(--text-muted);">No records found for the specified range.</td></tr>`;
                 } else {
                     records.forEach(rec => {
                         const comp = comparison.find(c => c.Quarter === rec.Quarter) || {};
@@ -931,6 +949,7 @@
                                 <td><span class="source-tag">${rec['PAT Source'] || 'screener'}</span></td>
                                 <td><strong>${rec['EPS in Rs'] ? rec['EPS in Rs'].toFixed(2) : 'N/A'}</strong></td>
                                 <td>${formatYoY(epsYoY)}</td>
+                                <td>${(rec['Free Float'] !== undefined && rec['Free Float'] !== null) ? Number(rec['Free Float']).toFixed(2) + '%' : '--'}</td>
                                 <td>${price}</td>
                                 <td><span class="source-tag">${rec['EPS Source'] || 'screener'}</span></td>
                             </tr>
@@ -962,7 +981,7 @@
         // thead/tbody ids. `formatVal` turns a numeric cell into display HTML.
         function renderPivot(headId, bodyId, quarters, rows, formatVal) {
             const thead = document.getElementById(headId);
-            let headerHtml = `<tr><th>Company / Scrip</th><th>BSE Code</th><th>ISIN</th><th>Free Float %</th>`;
+            let headerHtml = `<tr><th>Company / Scrip</th><th>BSE Code</th><th>ISIN</th>`;
             quarters.forEach(q => { headerHtml += `<th>${q}</th>`; });
             headerHtml += `</tr>`;
             thead.innerHTML = headerHtml;
@@ -970,18 +989,15 @@
             const tbody = document.getElementById(bodyId);
             tbody.innerHTML = '';
             if (!rows || rows.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="${quarters.length + 4}" style="text-align: center; color: var(--text-muted);">No pivot comparison data available.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="${quarters.length + 3}" style="text-align: center; color: var(--text-muted);">No pivot comparison data available.</td></tr>`;
                 return;
             }
             rows.forEach(row => {
-                const ff = row['Free Float %'];
-                const ffDisplay = ff !== undefined && ff !== null ? `${Number(ff).toFixed(2)}%` : '--';
                 let rowHtml = `
                     <tr>
                         <td><strong>${row.Symbol}</strong> <span style="font-size: 0.8rem; color: var(--text-muted); block">${row.Name || ''}</span></td>
                         <td>${row.BSE || 'N/A'}</td>
                         <td><span style="font-size: 0.85rem; font-family: monospace;">${row.ISIN || 'N/A'}</span></td>
-                        <td>${ffDisplay}</td>
                 `;
                 quarters.forEach(q => {
                     const val = row[q];
@@ -1039,6 +1055,7 @@
                 const periodWord = period === 'yearly' ? 'Yearly' : 'Quarterly';
                 document.getElementById('pivot-title').innerText = `${periodWord} EPS Comparison (${pivotLabel})`;
                 document.getElementById('pat-pivot-title').innerText = `${periodWord} PAT Comparison (₹ Cr)`;
+                document.getElementById('ff-pivot-title').innerText = `${periodWord} Free Float % (Public)`;
 
                 // EPS pivot: values are per-share, formatted with a ₹ prefix and 2 decimals.
                 renderPivot('pivot-table-headers', 'pivot-table-body', data.quarters, data.rows,
@@ -1047,6 +1064,10 @@
                 // PAT pivot: values are ₹ crore, shown with Indian grouping.
                 renderPivot('pat-pivot-headers', 'pat-pivot-body', data.quarters, data.pat_rows,
                     (val) => `<strong>${Number(val).toLocaleString('en-IN')}</strong>`);
+
+                // Free float pivot: public shareholding %, 2 decimals.
+                renderPivot('ff-pivot-headers', 'ff-pivot-body', data.quarters, data.freefloat_rows,
+                    (val) => `<strong>${Number(val).toFixed(2)}%</strong>`);
 
             } catch (err) {
                 showError(err.message);

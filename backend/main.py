@@ -252,6 +252,15 @@ def scrape_and_enrich_quarters(resolved: dict, consolidated: bool, from_quarter:
             r["EPS Source"] = "screener (basic)" if eps_type == "basic" else "screener"
             r["PAT Source"] = "screener"
 
+    # Attach per-period free float (100 − promoter%) from Screener's shareholding
+    # section, parsed during the scrape above (no extra request). Yearly labels
+    # ("Mar YYYY") map directly onto the shareholding series' March quarters.
+    from backend.scraper import get_screener_free_float
+    ff = get_screener_free_float(resolved["symbol"]) or {}
+    ff_series = ff.get("series", {})
+    for r in records:
+        r["Free Float"] = ff_series.get(r["Quarter"])
+
     # Re-filter to get updated filtered records
     filtered_enriched = filter_quarters(records, from_quarter, to_quarter)
 
@@ -324,6 +333,7 @@ def fetch_eps(req: EPSRequest):
 
         rows = []
         pat_rows = []
+        freefloat_rows = []
         company_entries = []
         all_quarters_set = set()
         warnings = []
@@ -342,23 +352,19 @@ def fetch_eps(req: EPSRequest):
                 if not filtered:
                     continue
 
-                # Free float after enrichment: the Screener page it just fetched
-                # has already populated the free-float cache (no extra request).
-                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 row_dict = _build_row_from_query(query, filtered)
                 pat_row = _build_row_from_query(query, filtered, field="Net Profit")
-                row_dict["Free Float %"] = ff_val
-                pat_row["Free Float %"] = ff_val
+                ff_row = _build_row_from_query(query, filtered, field="Free Float")
                 company_entries.append({
                     "query": query,
                     "resolved": resolved,
                     "filtered": filtered,
-                    "free_float": ff_val,
                 })
                 for rec in filtered:
                     all_quarters_set.add(rec["Quarter"])
                 rows.append(row_dict)
                 pat_rows.append(pat_row)
+                freefloat_rows.append(ff_row)
             except Exception as e:
                 warnings.append(f"Error fetching '{query}': {str(e)}")
 
@@ -373,6 +379,7 @@ def fetch_eps(req: EPSRequest):
             "quarters": sorted_quarters,
             "rows": rows,
             "pat_rows": pat_rows,
+            "freefloat_rows": freefloat_rows,
             "warnings": warnings
         }
     except Exception as e:
@@ -389,6 +396,7 @@ def export_excel(req: EPSRequest):
 
         rows = []
         pat_rows = []
+        freefloat_rows = []
         company_entries = []
         all_quarters_set = set()
         warnings = []
@@ -407,23 +415,19 @@ def export_excel(req: EPSRequest):
                 if not filtered:
                     continue
 
-                # Free float after enrichment: the Screener page it just fetched
-                # has already populated the free-float cache (no extra request).
-                ff_val = _free_float_value(resolved, deadline=min(time.monotonic() + 12, overall_deadline))
                 row_dict = _build_row_from_query(query, filtered)
                 pat_row = _build_row_from_query(query, filtered, field="Net Profit")
-                row_dict["Free Float %"] = ff_val
-                pat_row["Free Float %"] = ff_val
+                ff_row = _build_row_from_query(query, filtered, field="Free Float")
                 company_entries.append({
                     "query": query,
                     "resolved": resolved,
                     "filtered": filtered,
-                    "free_float": ff_val,
                 })
                 for rec in filtered:
                     all_quarters_set.add(rec["Quarter"])
                 rows.append(row_dict)
                 pat_rows.append(pat_row)
+                freefloat_rows.append(ff_row)
             except Exception as e:
                 warnings.append(f"Error fetching '{query}': {str(e)}")
 
@@ -436,7 +440,6 @@ def export_excel(req: EPSRequest):
         stock_rows = []
         for entry in company_entries:
             stock_row = _build_metadata_row(entry["query"], entry["resolved"])
-            stock_row["Free Float %"] = entry.get("free_float")
             price_map = get_bse_month_end_prices(entry["resolved"], sorted_quarters)
             stock_row.update(price_map)
             stock_rows.append(stock_row)
@@ -444,10 +447,11 @@ def export_excel(req: EPSRequest):
         # Create DataFrames
         df = pd.DataFrame(rows)
         pat_df = pd.DataFrame(pat_rows)
+        ff_df = pd.DataFrame(freefloat_rows)
         price_df = pd.DataFrame(stock_rows)
 
-        # Enforce column order: Symbol, BSE, ISIN, Free Float %, then quarters
-        cols_order = ["Symbol", "BSE", "ISIN", "Free Float %"] + sorted_quarters
+        # Enforce column order: Symbol, BSE, ISIN, then chronological periods
+        cols_order = ["Symbol", "BSE", "ISIN"] + sorted_quarters
 
         def _shape(frame):
             for col in cols_order:
@@ -459,19 +463,23 @@ def export_excel(req: EPSRequest):
 
         df = _shape(df)
         pat_df = _shape(pat_df)
+        ff_df = _shape(ff_df)
         price_df = _shape(price_df)
 
         period_word = "Yearly" if (req.period or "").lower() in ("yearly", "annual", "year") else "Quarterly"
         eps_sheet = f"{period_word} EPS ({'Basic' if req.eps_type == 'basic' else 'Diluted'})"
         pat_sheet = f"{period_word} PAT (Cr)"
+        ff_sheet = f"{period_word} Free Float %"
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name=eps_sheet)
             pat_df.to_excel(writer, index=False, sheet_name=pat_sheet)
+            ff_df.to_excel(writer, index=False, sheet_name=ff_sheet)
             price_df.to_excel(writer, index=False, sheet_name='Stock Prices')
 
             _style_excel_sheet(writer.sheets[eps_sheet], df)
             _style_excel_sheet(writer.sheets[pat_sheet], pat_df)
+            _style_excel_sheet(writer.sheets[ff_sheet], ff_df)
             _style_excel_sheet(writer.sheets['Stock Prices'], price_df)
 
         output.seek(0)

@@ -127,10 +127,12 @@ _FREE_FLOAT_CACHE: dict[str, dict] = {}
 
 def _parse_promoter_from_soup(soup) -> dict | None:
     """
-    Reads the latest promoter holding from Screener's <section id="shareholding">
-    and derives free float = 100 − promoter%. Screener's own "Public" row is only
-    retail public (excludes FII/DII), so it is NOT the free float; 100 − promoter
-    is. Returns {"free_float", "promoter", "quarter", "source"} or None.
+    Reads promoter holding per quarter from Screener's <section id="shareholding">
+    and derives free float = 100 − promoter% for each quarter. Screener's own
+    "Public" row is only retail public (excludes FII/DII), so it is NOT the free
+    float; 100 − promoter is. Returns:
+      {"series": {quarter_label: free_float}, "free_float": latest, "promoter":
+       latest_promoter, "quarter": latest_label, "source": "screener"} or None.
     """
     sec = soup.find("section", id="shareholding")
     if not sec:
@@ -140,6 +142,7 @@ def _parse_promoter_from_soup(soup) -> dict | None:
         return None
     thead = table.find("thead")
     headers = [c.get_text(strip=True) for c in thead.find_all(["th", "td"])] if thead else []
+    quarter_labels = headers[1:]  # first header cell is the row-label column
     tbody = table.find("tbody")
     if not tbody:
         return None
@@ -151,22 +154,32 @@ def _parse_promoter_from_soup(soup) -> dict | None:
         label = cells[0].get_text(strip=True).rstrip("+").strip().lower()
         if not label.startswith("promoter"):
             continue
+
         values = [c.get_text(strip=True) for c in cells[1:]]
-        # Latest (right-most) column that holds a real percentage.
-        for i in range(len(values) - 1, -1, -1):
-            v = values[i].replace("%", "").replace(",", "").strip()
+        series: dict[str, float] = {}
+        latest = None  # (label, free_float, promoter)
+        for i, raw in enumerate(values):
+            if i >= len(quarter_labels):
+                break
+            v = raw.replace("%", "").replace(",", "").strip()
             try:
                 prom = float(v)
             except ValueError:
                 continue
-            quarter = headers[i + 1] if i + 1 < len(headers) else None
-            return {
-                "free_float": round(100.0 - prom, 2),
-                "promoter": prom,
-                "quarter": quarter,
-                "source": "screener",
-            }
-        return None
+            q_label = quarter_labels[i]
+            ff = round(100.0 - prom, 2)
+            series[q_label] = ff
+            latest = (q_label, ff, prom)  # values are oldest→newest, so last wins
+
+        if not series or latest is None:
+            return None
+        return {
+            "series": series,
+            "free_float": latest[1],
+            "promoter": latest[2],
+            "quarter": latest[0],
+            "source": "screener",
+        }
     return None
 
 
