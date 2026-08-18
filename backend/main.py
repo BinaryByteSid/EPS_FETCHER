@@ -1,7 +1,7 @@
 import io
 import os
 import time
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Request, Query, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -321,6 +321,53 @@ async def get_companies():
     """
     from backend.scraper import COMPANIES_DB
     return COMPANIES_DB
+
+
+@app.post("/api/parse-symbols")
+async def parse_symbols(file: UploadFile = File(...)):
+    """
+    Reads an uploaded Excel/CSV of company identifiers (names, ISINs, BSE codes,
+    or symbols) and returns them as a de-duplicated list. Takes the first column
+    of the sheet, skipping a header-like first cell. Capped at MAX_COMPANIES.
+    """
+    _HEADER_WORDS = ("isin", "name", "symbol", "bse", "code", "company",
+                     "scrip", "ticker")
+    try:
+        content = await file.read()
+        name = (file.filename or "").lower()
+        buf = io.BytesIO(content)
+        if name.endswith(".csv") or name.endswith(".txt"):
+            df = pd.read_csv(buf, header=None, dtype=str)
+        else:
+            df = pd.read_excel(buf, header=None, dtype=str)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read the uploaded file: {e}")
+
+    if df.empty or df.shape[1] == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+
+    # First column holds the identifiers.
+    values = []
+    for v in df.iloc[:, 0].tolist():
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s.lower() != "nan":
+            values.append(s)
+
+    # Drop a header-like first cell (e.g. "ISIN", "Company Name", "ISIN/Name/Code").
+    if values and any(w in values[0].lower() for w in _HEADER_WORDS):
+        values = values[1:]
+
+    # De-duplicate case-insensitively, preserving order.
+    seen, out = set(), []
+    for v in values:
+        k = v.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(v)
+
+    return {"symbols": out[:MAX_COMPANIES], "total_found": len(out)}
 
 @app.post("/api/fetch-eps")
 def fetch_eps(req: EPSRequest):

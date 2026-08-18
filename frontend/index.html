@@ -590,8 +590,20 @@
             <!-- Multi Company Controls (Hidden by default) -->
             <div class="controls-grid hidden" id="multi-controls">
                 <div class="input-group">
-                    <label for="symbols-input">Up to 10 — Name / Symbol / ISIN / BSE Code (comma-separated)</label>
-                    <input type="text" id="symbols-input" class="input-field" placeholder="e.g. Reliance Industries, TCS, INE009A01021, 500180" value="RELIANCE, TCS">
+                    <label for="symbols-input">Up to 10 — Name / Symbol / ISIN / BSE Code (one per line)</label>
+                    <textarea id="symbols-input" class="input-field" rows="4" style="font-family: inherit; resize: vertical; min-height: 92px;" placeholder="One per line, e.g.
+Reliance Industries
+TCS
+INE009A01021
+500180">RELIANCE
+TCS</textarea>
+                    <div style="margin-top: 0.6rem; display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+                        <input type="file" id="symbols-file" accept=".xlsx,.xls,.csv,.txt" style="display: none;" onchange="uploadSymbolsFile(event)">
+                        <button type="button" class="btn btn-secondary" onclick="document.getElementById('symbols-file').click()">
+                            <i class="fa-solid fa-file-arrow-up"></i> Upload Excel
+                        </button>
+                        <span id="symbols-file-note" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+                    </div>
                 </div>
                 <div class="input-group">
                     <label for="from-q-multi">From Quarter</label>
@@ -1009,6 +1021,34 @@
             });
         }
 
+        // Parse an uploaded Excel/CSV of identifiers on the server and load them
+        // into the textarea (one per line) for the user to review before running.
+        async function uploadSymbolsFile(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            const note = document.getElementById('symbols-file-note');
+            note.innerText = 'Reading…';
+            clearError();
+            try {
+                const fd = new FormData();
+                fd.append('file', file);
+                const res = await fetch(`${API_BASE}/api/parse-symbols`, { method: 'POST', body: fd });
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.detail || 'Could not read the file.');
+                const syms = data.symbols || [];
+                if (syms.length === 0) throw new Error('No company identifiers found in the file.');
+                document.getElementById('symbols-input').value = syms.join('\n');
+                const capped = (data.total_found || syms.length) > syms.length
+                    ? ` (first ${syms.length} of ${data.total_found})` : '';
+                note.innerText = `Loaded ${syms.length} from ${file.name}${capped}`;
+            } catch (err) {
+                note.innerText = '';
+                showError(err.message);
+            } finally {
+                event.target.value = '';  // allow re-uploading the same file
+            }
+        }
+
         async function fetchMultiCompany() {
             clearError();
             showLoading(true);
@@ -1026,7 +1066,7 @@
                 return;
             }
 
-            const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean);
+            const symbols = symbolsRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
 
             try {
                 const res = await fetch(`${API_BASE}/api/pivot`, {
@@ -1106,7 +1146,7 @@
                 return;
             }
 
-            const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean);
+            const symbols = symbolsRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
             let queryStr = symbols.map(s => `symbols=${encodeURIComponent(s)}`).join('&');
 
             const url = `${API_BASE}/api/export?${queryStr}&from_quarter=${encodeURIComponent(fromQ)}&to_quarter=${encodeURIComponent(toQ)}&consolidated=${consolidated}&eps_type=${encodeURIComponent(epsType)}&period=${encodeURIComponent(period)}`;
