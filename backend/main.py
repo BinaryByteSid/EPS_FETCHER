@@ -32,13 +32,18 @@ PDF_EPS_BUDGET_SECONDS = 120.0
 # structured API and NSE XBRL cover the vast majority of companies without it.
 ENABLE_PDF_FALLBACK = os.environ.get("ENABLE_PDF_FALLBACK", "").lower() in ("1", "true", "yes")
 
-# Total wall-clock budget for a whole multi-company request. Without this cap a
-# 10-company pivot would grant each company a fresh PDF budget and could block
-# the single worker for many minutes, so Render's health checks fail and the
-# instance is restarted (looks like a crash). Once this elapses, remaining
-# companies fall back to Screener's figures (cheap) and fill in on a later
-# request via the per-quarter caches.
-MULTI_REQUEST_BUDGET_SECONDS = 200.0
+# Total wall-clock budget for a whole multi-company request. Kept below the
+# ~100s HTTP timeout that Render / browsers enforce: BSE rate-limits every call
+# so each company's filed-EPS enrichment can take ~30-40s, and an unbounded
+# 5-company request runs ~190s and gets killed by the proxy — which looked like
+# "can't compare more than 3 companies". With this cap the request always
+# returns; companies whose turn ran past the budget show Screener's figures and
+# fill in filed values on a repeat click (the per-quarter caches converge).
+MULTI_REQUEST_BUDGET_SECONDS = 70.0
+
+# Per-company slice of that budget, so the time is spread across the batch
+# instead of the first company consuming it all.
+MULTI_PER_COMPANY_BUDGET_SECONDS = 18.0
 
 # Enable CORS for development
 app.add_middleware(
@@ -392,7 +397,7 @@ def fetch_eps(req: EPSRequest):
 
         for query in symbol_list:
             try:
-                deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
+                deadline = min(time.monotonic() + MULTI_PER_COMPANY_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
@@ -417,6 +422,9 @@ def fetch_eps(req: EPSRequest):
 
         if not rows:
             raise Exception("Failed to fetch data for all requested companies:\n" + "\n".join(warnings))
+
+        if time.monotonic() >= overall_deadline:
+            warnings.append("Time budget reached — some companies may show Screener figures instead of filed EPS/PAT. Click Compare again to fill them in (results are cached).")
 
         # Sort quarters chronologically
         sorted_quarters = sorted(list(all_quarters_set), key=parse_quarter)
@@ -455,7 +463,7 @@ def export_excel(req: EPSRequest):
 
         for query in symbol_list:
             try:
-                deadline = min(time.monotonic() + PDF_EPS_BUDGET_SECONDS, overall_deadline)
+                deadline = min(time.monotonic() + MULTI_PER_COMPANY_BUDGET_SECONDS, overall_deadline)
                 resolved = resolve_company(query)
                 records, filtered = scrape_and_enrich_quarters(resolved, req.consolidated, req.from_quarter, req.to_quarter, deadline=deadline, eps_type=req.eps_type, period=req.period)
 
